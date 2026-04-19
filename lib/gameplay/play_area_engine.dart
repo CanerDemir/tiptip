@@ -29,11 +29,19 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final ObjectPool<_NotationBit> _notationPool = ObjectPool<_NotationBit>(
     _NotationBit.new,
   );
+  final ObjectPool<_FloralCore> _floralPool = ObjectPool<_FloralCore>(
+    _FloralCore.new,
+  );
+  final ObjectPool<_FlowerPetal> _petalPool = ObjectPool<_FlowerPetal>(
+    _FlowerPetal.new,
+  );
 
   final List<_RippleRing> _ripples = <_RippleRing>[];
   final List<_StarParticle> _stars = <_StarParticle>[];
   final List<_JellyWobble> _jellies = <_JellyWobble>[];
   final List<_NotationBit> _notationBits = <_NotationBit>[];
+  final List<_FloralCore> _floralCores = <_FloralCore>[];
+  final List<_FlowerPetal> _flowerPetals = <_FlowerPetal>[];
   final math.Random _rng = math.Random();
 
   Duration? _lastElapsed;
@@ -46,12 +54,19 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   static const double _starLifeMs = 980;
   static const double _starBaseSpeed = 220;
   static const int _notationBurstCount = 10;
+  static const double _floralSeedMs = 220;
+  static const double _floralBloomMs = 520;
+  static const int _floralPetalCount = 14;
+  /// Bloom + flying petal size vs original art (seed stays relatively small).
+  static const double _floralVisualScale = 1.68;
 
   bool get hasActiveEffects =>
       _ripples.isNotEmpty ||
       _stars.isNotEmpty ||
       _jellies.isNotEmpty ||
-      _notationBits.isNotEmpty;
+      _notationBits.isNotEmpty ||
+      _floralCores.isNotEmpty ||
+      _flowerPetals.isNotEmpty;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
     handleTapWithPitch(localPosition, areaSize, mode, null);
@@ -78,6 +93,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
           localPosition,
           pitchClass ?? _rng.nextInt(5),
         );
+        break;
+      case GameplayMode.floralBloom:
+        _spawnFloralBloom(localPosition);
         break;
     }
     _ensureTicker();
@@ -115,6 +133,17 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       ..phase = _rng.nextDouble() * math.pi * 2
       ..alive = true;
     _jellies.add(wobble);
+    notifyListeners();
+  }
+
+  void _spawnFloralBloom(Offset origin) {
+    final _FloralCore core = _floralPool.acquire();
+    core
+      ..center = origin
+      ..ageMs = 0
+      ..hueSeed = _rng.nextInt(100000)
+      ..alive = true;
+    _floralCores.add(core);
     notifyListeners();
   }
 
@@ -181,6 +210,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updateStars(dtMs);
     _updateJellies(dtMs);
     _updateNotationBits(dtMs);
+    _updateFloralCores(dtMs);
+    _updateFlowerPetals(dtMs);
 
     if (hasActiveEffects) {
       notifyListeners();
@@ -267,6 +298,205 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     }
   }
 
+  void _updateFloralCores(double dtMs) {
+    final double totalMs = _floralSeedMs + _floralBloomMs;
+    for (int i = _floralCores.length - 1; i >= 0; i--) {
+      final _FloralCore c = _floralCores[i];
+      c.ageMs += dtMs;
+      if (c.ageMs >= totalMs) {
+        _explodeFloralCore(c);
+        c.alive = false;
+        _floralCores.removeAt(i);
+        _floralPool.release(c);
+      }
+    }
+  }
+
+  void _explodeFloralCore(_FloralCore c) {
+    for (int i = 0; i < _floralPetalCount; i++) {
+      final _FlowerPetal petal = _petalPool.acquire();
+      final double baseAngle = (i / _floralPetalCount) * math.pi * 2;
+      final double spread = (_rng.nextDouble() - 0.5) * 0.4;
+      final double angle = baseAngle + spread;
+      final double speed = 195 + _rng.nextDouble() * 165;
+      petal
+        ..x = c.center.dx
+        ..y = c.center.dy
+        ..vx = math.cos(angle) * speed
+        ..vy = math.sin(angle) * speed * 0.72
+        ..rotation = angle + math.pi / 2
+        ..spin = (_rng.nextBool() ? 1 : -1) * (2.2 + _rng.nextDouble() * 3.2)
+        ..ageMs = 0
+        ..lifeMs = 2100 + _rng.nextDouble() * 500
+        ..hueSeed = c.hueSeed
+        ..hueIndex = i
+        ..variant = i % 3
+        ..flutterPhase = _rng.nextDouble() * math.pi * 2
+        ..width = (11 + _rng.nextDouble() * 7) * _floralVisualScale
+        ..length = (17 + _rng.nextDouble() * 11) * _floralVisualScale
+        ..alive = true;
+      _flowerPetals.add(petal);
+    }
+  }
+
+  void _updateFlowerPetals(double dtMs) {
+    final double dtSec = dtMs / 1000.0;
+    const double gravity = 240;
+    for (int i = _flowerPetals.length - 1; i >= 0; i--) {
+      final _FlowerPetal p = _flowerPetals[i];
+      p.ageMs += dtMs;
+      final double flutter =
+          math.sin(p.ageMs * 0.0085 + p.flutterPhase) * 32 * dtSec;
+      p.vx += flutter;
+      p.vx *= 0.991;
+      p.vy *= 0.997;
+      p.vy += gravity * dtSec;
+      p.x += p.vx * dtSec;
+      p.y += p.vy * dtSec;
+      p.rotation += p.spin * dtSec * 0.42;
+      if (p.ageMs >= p.lifeMs) {
+        p.alive = false;
+        _flowerPetals.removeAt(i);
+        _petalPool.release(p);
+      }
+    }
+  }
+
+  Color _floralPetalColor(int hueSeed, int index) {
+    final double hue = ((hueSeed * 0.137) + index * 23.7) % 360;
+    return HSVColor.fromAHSV(1, hue, 0.36, 0.97).toColor();
+  }
+
+  Path _organicPetalPath(int variant) {
+    final Path path = Path();
+    switch (variant % 3) {
+      case 0:
+        path.moveTo(14, 0);
+        path.cubicTo(10, 6.5, -4, 10.5, -12, 4);
+        path.cubicTo(-9, -2.5, 2, -8, 14, 0);
+        break;
+      case 1:
+        path.moveTo(15.5, 0.5);
+        path.cubicTo(11, 8, -6.5, 11.5, -11, 2);
+        path.cubicTo(-7, -8.5, 4.5, -7.5, 15.5, 0.5);
+        break;
+      default:
+        path.moveTo(13, 1);
+        path.cubicTo(9, 8.5, -8, 7.5, -10, 0);
+        path.cubicTo(-6, -9.5, 8, -6, 13, 1);
+        break;
+    }
+    path.close();
+    return path;
+  }
+
+  void _paintFloralCore(Canvas canvas, _FloralCore c) {
+    if (c.ageMs < _floralSeedMs) {
+      final double st = (c.ageMs / _floralSeedMs).clamp(0.0, 1.0);
+      final double e = Curves.easeOut.transform(st);
+      final double r = ui.lerpDouble(2.8, 7.2, e)!;
+      final Paint seed = Paint()
+        ..style = PaintingStyle.fill
+        ..shader = RadialGradient(
+          colors: <Color>[
+            const Color(0xFF8D6E63),
+            const Color(0xFF5D4037),
+          ],
+        ).createShader(Rect.fromCircle(center: c.center, radius: r * 1.4));
+      canvas.drawCircle(c.center, r, seed);
+      final Paint glint = Paint()
+        ..color = const Color(0xFFD7CCC8).withValues(alpha: 0.35 * e);
+      canvas.drawCircle(
+        Offset(c.center.dx - r * 0.25, c.center.dy - r * 0.35),
+        r * 0.28,
+        glint,
+      );
+      return;
+    }
+
+    final double bt =
+        ((c.ageMs - _floralSeedMs) / _floralBloomMs).clamp(0.0, 1.0);
+    final double grow = Curves.easeOutBack.transform(bt).clamp(0.0, 1.15);
+    final double s = grow * _floralVisualScale;
+    const int bloomPetals = 10;
+    final Offset o = c.center;
+
+    final Paint centerGlow = Paint()
+      ..shader = RadialGradient(
+        colors: <Color>[
+          const Color(0xFFFFF59D).withValues(alpha: 0.95),
+          const Color(0xFFFFE082).withValues(alpha: 0.55),
+          const Color(0xFFFFB74D).withValues(alpha: 0.15),
+        ],
+        stops: const <double>[0.0, 0.45, 1.0],
+      ).createShader(Rect.fromCircle(center: o, radius: 14 * s));
+    canvas.drawCircle(o, 8 * s, centerGlow);
+
+    for (int i = 0; i < bloomPetals; i++) {
+      final double angle = (i / bloomPetals) * math.pi * 2;
+      final Color col = _floralPetalColor(c.hueSeed, i);
+      canvas.save();
+      canvas.translate(o.dx, o.dy);
+      canvas.rotate(angle);
+      canvas.translate(11 * s, 0);
+      final RRect petal = RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset.zero,
+          width: 24 * s,
+          height: 10 * s,
+        ),
+        Radius.circular(5 * s),
+      );
+      final Paint fill = Paint()
+        ..color = col.withValues(alpha: 0.82);
+      final Paint edge = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.1 * _floralVisualScale
+        ..color = Color.lerp(col, Colors.white, 0.4)!
+            .withValues(alpha: 0.35);
+      canvas.drawRRect(petal, fill);
+      canvas.drawRRect(petal, edge);
+      canvas.restore();
+    }
+
+    final Paint pistil = Paint()
+      ..color = const Color(0xFFFFC107).withValues(alpha: 0.9);
+    canvas.drawCircle(o, 3.2 * s, pistil);
+  }
+
+  void _paintFlowerPetal(Canvas canvas, _FlowerPetal p) {
+    final double t = (p.ageMs / p.lifeMs).clamp(0.0, 1.0);
+    final double fade =
+        (1.0 - Curves.easeIn.transform(t)) * (1.0 - t * 0.12);
+    if (fade <= 0.02) {
+      return;
+    }
+
+    final Color base = _floralPetalColor(p.hueSeed, p.hueIndex);
+    final Path shape = _organicPetalPath(p.variant);
+    final double sx = p.length / 15.0;
+    final double sy = p.width / 11.0;
+
+    canvas.save();
+    canvas.translate(p.x, p.y);
+    canvas.rotate(p.rotation);
+    canvas.scale(sx, sy);
+
+    final Paint fill = Paint()
+      ..style = PaintingStyle.fill
+      ..color = base.withValues(alpha: (0.62 * fade).clamp(0.0, 1.0));
+    final Paint stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.15 / math.min(sx, sy)
+      ..strokeJoin = StrokeJoin.round
+      ..color = Color.lerp(base, Colors.white, 0.38)!
+          .withValues(alpha: 0.28 * fade);
+
+    canvas.drawPath(shape, fill);
+    canvas.drawPath(shape, stroke);
+    canvas.restore();
+  }
+
   @override
   void dispose() {
     if (_ticker.isActive) {
@@ -287,8 +517,14 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     for (final _JellyWobble j in _jellies) {
       _paintJellyWobble(canvas, j);
     }
+    for (final _FloralCore c in _floralCores) {
+      _paintFloralCore(canvas, c);
+    }
     for (final _NotationBit n in _notationBits) {
       _paintNotationBit(canvas, n);
+    }
+    for (final _FlowerPetal petal in _flowerPetals) {
+      _paintFlowerPetal(canvas, petal);
     }
     for (final _StarParticle p in _stars) {
       _paintStarParticle(canvas, p);
@@ -650,6 +886,31 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     path.close();
     return path;
   }
+}
+
+class _FloralCore {
+  Offset center = Offset.zero;
+  double ageMs = 0;
+  int hueSeed = 0;
+  bool alive = false;
+}
+
+class _FlowerPetal {
+  double x = 0;
+  double y = 0;
+  double vx = 0;
+  double vy = 0;
+  double rotation = 0;
+  double spin = 0;
+  double ageMs = 0;
+  double lifeMs = 2200;
+  int hueSeed = 0;
+  int hueIndex = 0;
+  int variant = 0;
+  double flutterPhase = 0;
+  double width = 14;
+  double length = 20;
+  bool alive = false;
 }
 
 class _RippleRing {

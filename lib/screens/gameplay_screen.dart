@@ -150,6 +150,9 @@ class _GameplayScreenState extends State<GameplayScreen>
         pitchClass = _nextRainPitchClass();
         unawaited(GameplaySfx.instance.playRainPentatonicChime(pitchClass));
         break;
+      case GameplayMode.floralBloom:
+        unawaited(GameplaySfx.instance.playWaterDrip());
+        break;
     }
     _playEngine.handleTapWithPitch(
       details.localPosition,

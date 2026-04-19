@@ -163,6 +163,13 @@ class _Body extends StatelessWidget {
                         isSelected: selectedMode == GameplayMode.musicalRain,
                         onTap: () => onModeSelected(GameplayMode.musicalRain),
                       ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.floralBloom,
+                        isSelected: selectedMode == GameplayMode.floralBloom,
+                        onTap: () => onModeSelected(GameplayMode.floralBloom),
+                      ),
                     ],
                   ),
                 ),
