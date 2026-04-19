@@ -26,10 +26,14 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final ObjectPool<_JellyWobble> _jellyPool = ObjectPool<_JellyWobble>(
     _JellyWobble.new,
   );
+  final ObjectPool<_NotationBit> _notationPool = ObjectPool<_NotationBit>(
+    _NotationBit.new,
+  );
 
   final List<_RippleRing> _ripples = <_RippleRing>[];
   final List<_StarParticle> _stars = <_StarParticle>[];
   final List<_JellyWobble> _jellies = <_JellyWobble>[];
+  final List<_NotationBit> _notationBits = <_NotationBit>[];
   final math.Random _rng = math.Random();
 
   Duration? _lastElapsed;
@@ -41,11 +45,24 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   static const int _starCount = 14;
   static const double _starLifeMs = 980;
   static const double _starBaseSpeed = 220;
+  static const int _notationBurstCount = 10;
 
   bool get hasActiveEffects =>
-      _ripples.isNotEmpty || _stars.isNotEmpty || _jellies.isNotEmpty;
+      _ripples.isNotEmpty ||
+      _stars.isNotEmpty ||
+      _jellies.isNotEmpty ||
+      _notationBits.isNotEmpty;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
+    handleTapWithPitch(localPosition, areaSize, mode, null);
+  }
+
+  void handleTapWithPitch(
+    Offset localPosition,
+    Size areaSize,
+    GameplayMode mode,
+    int? pitchClass,
+  ) {
     switch (mode) {
       case GameplayMode.water:
         _spawnRipples(localPosition, areaSize, const Color(0xFF0284C7));
@@ -55,6 +72,12 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         break;
       case GameplayMode.jelly:
         _spawnJellyWobble(localPosition, areaSize);
+        break;
+      case GameplayMode.musicalRain:
+        _spawnNotationBurst(
+          localPosition,
+          pitchClass ?? _rng.nextInt(5),
+        );
         break;
     }
     _ensureTicker();
@@ -92,6 +115,28 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       ..phase = _rng.nextDouble() * math.pi * 2
       ..alive = true;
     _jellies.add(wobble);
+    notifyListeners();
+  }
+
+  void _spawnNotationBurst(Offset origin, int pitchClass) {
+    for (int i = 0; i < _notationBurstCount; i++) {
+      final _NotationBit bit = _notationPool.acquire();
+      final double angle = _rng.nextDouble() * math.pi * 2;
+      final double speed = 150 + _rng.nextDouble() * 160;
+      bit
+        ..x = origin.dx + (_rng.nextDouble() - 0.5) * 10
+        ..y = origin.dy + (_rng.nextDouble() - 0.5) * 10
+        ..vx = math.cos(angle) * speed
+        ..vy = math.sin(angle) * speed - 40
+        ..size = 6.5 + _rng.nextDouble() * 3.5
+        ..pitchClass = pitchClass
+        ..rotation = _rng.nextDouble() * math.pi * 2
+        ..spin = (_rng.nextBool() ? 1 : -1) * (2.2 + _rng.nextDouble() * 3.2)
+        ..lifeMs = 720 + _rng.nextDouble() * 260
+        ..ageMs = 0
+        ..alive = true;
+      _notationBits.add(bit);
+    }
     notifyListeners();
   }
 
@@ -135,6 +180,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updateRipples(dtMs);
     _updateStars(dtMs);
     _updateJellies(dtMs);
+    _updateNotationBits(dtMs);
 
     if (hasActiveEffects) {
       notifyListeners();
@@ -166,6 +212,26 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         j.alive = false;
         _jellies.removeAt(i);
         _jellyPool.release(j);
+      }
+    }
+  }
+
+  void _updateNotationBits(double dtMs) {
+    final double dtSec = dtMs / 1000.0;
+    const double drag = 0.985;
+    for (int i = _notationBits.length - 1; i >= 0; i--) {
+      final _NotationBit n = _notationBits[i];
+      n.ageMs += dtMs;
+      n.x += n.vx * dtSec;
+      n.y += n.vy * dtSec;
+      n.vx *= drag;
+      n.vy *= drag;
+      n.vy += 90 * dtSec;
+      n.rotation += n.spin * dtSec;
+      if (n.ageMs >= n.lifeMs) {
+        n.alive = false;
+        _notationBits.removeAt(i);
+        _notationPool.release(n);
       }
     }
   }
@@ -220,6 +286,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     }
     for (final _JellyWobble j in _jellies) {
       _paintJellyWobble(canvas, j);
+    }
+    for (final _NotationBit n in _notationBits) {
+      _paintNotationBit(canvas, n);
     }
     for (final _StarParticle p in _stars) {
       _paintStarParticle(canvas, p);
@@ -394,6 +463,133 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     return path;
   }
 
+  static const List<String> _rainPitchLabels = <String>[
+    'C4',
+    'D4',
+    'E4',
+    'G4',
+    'A4',
+  ];
+
+  Color _rainPitchColor(int pitchClass) {
+    return Color.lerp(
+      const Color(0xFF2DD4BF),
+      const Color(0xFF0EA5E9),
+      ((pitchClass % 5) / 4).clamp(0, 1).toDouble(),
+    )!;
+  }
+
+  String _rainPitchLabel(int pitchClass) {
+    return _rainPitchLabels[pitchClass.clamp(0, _rainPitchLabels.length - 1)];
+  }
+
+  void _paintNotationBit(Canvas canvas, _NotationBit n) {
+    final double t = (n.ageMs / n.lifeMs).clamp(0.0, 1.0);
+    final double fade =
+        (1.0 - Curves.easeOut.transform(t)) * (1.0 - t * 0.15);
+    if (fade <= 0.02) {
+      return;
+    }
+
+    final double streakLen = 18 + n.size * 1.2;
+    final double speed = math.sqrt(n.vx * n.vx + n.vy * n.vy) + 0.001;
+    final double ux = n.vx / speed;
+    final double uy = n.vy / speed;
+    final Offset tail = Offset(n.x - ux * streakLen, n.y - uy * streakLen);
+    final Paint streak = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment(ux, uy),
+        end: Alignment(-ux, -uy),
+        colors: <Color>[
+          _rainPitchColor(n.pitchClass).withValues(alpha: 0),
+          _rainPitchColor(n.pitchClass).withValues(alpha: 0.12 * fade),
+        ],
+      ).createShader(Rect.fromPoints(tail, Offset(n.x, n.y)))
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(tail, Offset(n.x, n.y), streak);
+
+    _paintNotationGlyph(
+      canvas,
+      n.x,
+      n.y,
+      n.pitchClass,
+      n.size,
+      fade,
+      n.rotation,
+    );
+  }
+
+  void _paintNotationGlyph(
+    Canvas canvas,
+    double cx,
+    double cy,
+    int pitchClass,
+    double size,
+    double fade,
+    double rotation,
+  ) {
+    final Color noteTint = _rainPitchColor(pitchClass);
+    final Color noteColor = noteTint.withValues(alpha: (0.92 * fade).clamp(0.0, 1.0));
+
+    const IconData noteIcon = Icons.music_note_rounded;
+    final String label = _rainPitchLabel(pitchClass);
+    final TextPainter labelPainter = TextPainter(
+      text: TextSpan(
+        children: <InlineSpan>[
+          TextSpan(
+            text: String.fromCharCode(noteIcon.codePoint),
+            style: TextStyle(
+              inherit: false,
+              fontFamily: noteIcon.fontFamily,
+              package: noteIcon.fontPackage,
+              fontSize: size * 0.95,
+              color: noteColor,
+              height: 1.05,
+            ),
+          ),
+          TextSpan(
+            text: ' $label',
+            style: TextStyle(
+              fontSize: size * 0.62,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.6,
+              color: noteColor,
+              height: 1.05,
+            ),
+          ),
+        ],
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    labelPainter.layout(maxWidth: 220);
+
+    final double pad = 5;
+    final double badgeW = labelPainter.width + pad * 2;
+    final double badgeH = labelPainter.height + pad * 2;
+    final RRect badge = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, badgeW, badgeH),
+      Radius.circular(size * 0.45),
+    );
+    final Paint bg = Paint()
+      ..color = Colors.white.withValues(alpha: (0.9 * fade).clamp(0.0, 1.0))
+      ..style = PaintingStyle.fill;
+    final Paint border = Paint()
+      ..color = noteTint.withValues(alpha: (0.4 * fade).clamp(0.0, 1.0))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1;
+
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(rotation);
+    canvas.translate(-badgeW / 2, -badgeH / 2);
+    canvas.drawRRect(badge, bg);
+    canvas.drawRRect(badge, border);
+    labelPainter.paint(canvas, Offset(pad, pad));
+    canvas.restore();
+  }
+
   void _paintStarParticle(Canvas canvas, _StarParticle p) {
     final double t = (p.ageMs / p.lifeMs).clamp(0.0, 1.0);
     final double scale =
@@ -477,6 +673,20 @@ class _JellyWobble {
   double stiffness = 16;
   double damping = 6.8;
   double phase = 0;
+  bool alive = false;
+}
+
+class _NotationBit {
+  double x = 0;
+  double y = 0;
+  double vx = 0;
+  double vy = 0;
+  double size = 9;
+  int pitchClass = 0;
+  double rotation = 0;
+  double spin = 0;
+  double lifeMs = 800;
+  double ageMs = 0;
   bool alive = false;
 }
 

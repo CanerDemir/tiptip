@@ -127,28 +127,47 @@ class _Body extends StatelessWidget {
             ),
           ),
           SizedBox(height: MediaQuery.sizeOf(context).height * 0.08),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: <Widget>[
-              _ModeIconCircle(
-                diameter: modeIconDiameter,
-                mode: GameplayMode.water,
-                isSelected: selectedMode == GameplayMode.water,
-                onTap: () => onModeSelected(GameplayMode.water),
-              ),
-              _ModeIconCircle(
-                diameter: modeIconDiameter,
-                mode: GameplayMode.star,
-                isSelected: selectedMode == GameplayMode.star,
-                onTap: () => onModeSelected(GameplayMode.star),
-              ),
-              _ModeIconCircle(
-                diameter: modeIconDiameter,
-                mode: GameplayMode.jelly,
-                isSelected: selectedMode == GameplayMode.jelly,
-                onTap: () => onModeSelected(GameplayMode.jelly),
-              ),
-            ],
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minWidth: constraints.maxWidth),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: <Widget>[
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.water,
+                        isSelected: selectedMode == GameplayMode.water,
+                        onTap: () => onModeSelected(GameplayMode.water),
+                      ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.star,
+                        isSelected: selectedMode == GameplayMode.star,
+                        onTap: () => onModeSelected(GameplayMode.star),
+                      ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.jelly,
+                        isSelected: selectedMode == GameplayMode.jelly,
+                        onTap: () => onModeSelected(GameplayMode.jelly),
+                      ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.musicalRain,
+                        isSelected: selectedMode == GameplayMode.musicalRain,
+                        onTap: () => onModeSelected(GameplayMode.musicalRain),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),

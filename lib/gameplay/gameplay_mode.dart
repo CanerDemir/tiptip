@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum GameplayMode { water, star, jelly }
+enum GameplayMode { water, star, jelly, musicalRain }
 
 extension GameplayModeVisual on GameplayMode {
   IconData get icon {
@@ -11,6 +11,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.star_rounded;
       case GameplayMode.jelly:
         return Icons.bubble_chart_rounded;
+      case GameplayMode.musicalRain:
+        return Icons.music_note_rounded;
     }
   }
 
@@ -22,6 +24,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFFEAB308);
       case GameplayMode.jelly:
         return const Color(0xFFEC4899);
+      case GameplayMode.musicalRain:
+        return const Color(0xFF14B8A6);
     }
   }
 
@@ -33,6 +37,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Star mode';
       case GameplayMode.jelly:
         return 'Jelly wobble mode';
+      case GameplayMode.musicalRain:
+        return 'Musical rain mode';
     }
   }
 }

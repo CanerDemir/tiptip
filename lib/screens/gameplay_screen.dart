@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -26,6 +27,8 @@ class _GameplayScreenState extends State<GameplayScreen>
 
   late int _activeModeIndex;
   bool _isModeAnimating = false;
+  final math.Random _noteRandom = math.Random();
+  int _lastRainPitch = -1;
 
   static const double _iconSlot = 56;
   static const double _modeSpacing = 20;
@@ -133,6 +136,7 @@ class _GameplayScreenState extends State<GameplayScreen>
   void _onPlayAreaTap(TapDownDetails details, Size areaSize) {
     HapticFeedback.lightImpact();
     final GameplayMode mode = GameplayMode.values[_activeModeIndex];
+    int? pitchClass;
     switch (mode) {
       case GameplayMode.water:
         unawaited(GameplaySfx.instance.playWaterDrip());
@@ -142,8 +146,26 @@ class _GameplayScreenState extends State<GameplayScreen>
         break;
       case GameplayMode.jelly:
         break;
+      case GameplayMode.musicalRain:
+        pitchClass = _nextRainPitchClass();
+        unawaited(GameplaySfx.instance.playRainPentatonicChime(pitchClass));
+        break;
     }
-    _playEngine.handleTap(details.localPosition, areaSize, mode);
+    _playEngine.handleTapWithPitch(
+      details.localPosition,
+      areaSize,
+      mode,
+      pitchClass,
+    );
+  }
+
+  int _nextRainPitchClass() {
+    int next = _noteRandom.nextInt(5);
+    if (next == _lastRainPitch) {
+      next = (next + 1 + _noteRandom.nextInt(4)) % 5;
+    }
+    _lastRainPitch = next;
+    return next;
   }
 
   @override
