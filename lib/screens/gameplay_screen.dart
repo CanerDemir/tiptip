@@ -133,9 +133,12 @@ class _GameplayScreenState extends State<GameplayScreen>
     }
   }
 
-  void _onPlayAreaTap(TapDownDetails details, Size areaSize) {
+  void _triggerModeTap(
+    GameplayMode mode,
+    Offset localPosition,
+    Size areaSize,
+  ) {
     HapticFeedback.lightImpact();
-    final GameplayMode mode = GameplayMode.values[_activeModeIndex];
     int? pitchClass;
     switch (mode) {
       case GameplayMode.water:
@@ -153,9 +156,11 @@ class _GameplayScreenState extends State<GameplayScreen>
       case GameplayMode.floralBloom:
         unawaited(GameplaySfx.instance.playWaterDrip());
         break;
+      case GameplayMode.magneticDust:
+        break;
     }
     _playEngine.handleTapWithPitch(
-      details.localPosition,
+      localPosition,
       areaSize,
       mode,
       pitchClass,
@@ -205,12 +210,41 @@ class _GameplayScreenState extends State<GameplayScreen>
               builder: (BuildContext context, BoxConstraints constraints) {
                 final Size areaSize = constraints.biggest;
                 return RepaintBoundary(
-                  child: GestureDetector(
+                  child: Listener(
                     behavior: HitTestBehavior.opaque,
-                    onTapDown: (TapDownDetails d) =>
-                        _onPlayAreaTap(d, areaSize),
+                    onPointerDown: (PointerDownEvent e) {
+                      final GameplayMode mode =
+                          GameplayMode.values[_activeModeIndex];
+                      if (mode == GameplayMode.magneticDust) {
+                        HapticFeedback.selectionClick();
+                        _playEngine.magneticTouchDown(
+                          e.localPosition,
+                          e.pointer,
+                        );
+                      } else {
+                        _triggerModeTap(mode, e.localPosition, areaSize);
+                      }
+                    },
+                    onPointerMove: (PointerMoveEvent e) {
+                      if (GameplayMode.values[_activeModeIndex] ==
+                          GameplayMode.magneticDust) {
+                        _playEngine.magneticTouchMove(
+                          e.localPosition,
+                          e.pointer,
+                        );
+                      }
+                    },
+                    onPointerUp: (PointerUpEvent e) {
+                      _playEngine.magneticTouchUp(e.pointer);
+                    },
+                    onPointerCancel: (PointerCancelEvent e) {
+                      _playEngine.magneticTouchUp(e.pointer);
+                    },
                     child: CustomPaint(
-                      painter: PlayAreaPainter(_playEngine),
+                      painter: PlayAreaPainter(
+                        _playEngine,
+                        GameplayMode.values[_activeModeIndex],
+                      ),
                       child: const SizedBox.expand(),
                     ),
                   ),

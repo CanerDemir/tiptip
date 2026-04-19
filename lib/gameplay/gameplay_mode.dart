@@ -1,6 +1,13 @@
 import 'package:flutter/material.dart';
 
-enum GameplayMode { water, star, jelly, musicalRain, floralBloom }
+enum GameplayMode {
+  water,
+  star,
+  jelly,
+  musicalRain,
+  floralBloom,
+  magneticDust,
+}
 
 extension GameplayModeVisual on GameplayMode {
   IconData get icon {
@@ -15,6 +22,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.music_note_rounded;
       case GameplayMode.floralBloom:
         return Icons.local_florist_rounded;
+      case GameplayMode.magneticDust:
+        return Icons.blur_on_rounded;
     }
   }
 
@@ -30,6 +39,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFF14B8A6);
       case GameplayMode.floralBloom:
         return const Color(0xFFE879A9);
+      case GameplayMode.magneticDust:
+        return const Color(0xFF8B7EC8);
     }
   }
 
@@ -45,6 +56,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Musical rain mode';
       case GameplayMode.floralBloom:
         return 'Floral bloom mode';
+      case GameplayMode.magneticDust:
+        return 'Magnetic dust mode';
     }
   }
 }

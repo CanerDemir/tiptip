@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -44,6 +45,27 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final List<_FlowerPetal> _flowerPetals = <_FlowerPetal>[];
   final math.Random _rng = math.Random();
 
+  Float32List? _dustPos;
+  Float32List? _dustHome;
+  Float32List? _dustVel;
+  Float32List? _dustPhase;
+  int _dustCount = 0;
+  double _dustLayoutW = 0;
+  double _dustLayoutH = 0;
+  bool _magnetActive = false;
+  double _magnetX = 0;
+  double _magnetY = 0;
+  int? _magnetPointerId;
+  double _dustTimeSec = 0;
+
+  final Paint _dustVertexPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..color = const Color(0xFF7D8694).withValues(alpha: 0.58)
+    ..strokeCap = StrokeCap.round
+    ..strokeWidth = 1.55
+    ..isAntiAlias = true
+    ..blendMode = BlendMode.srcOver;
+
   Duration? _lastElapsed;
   bool _ticking = false;
 
@@ -60,13 +82,25 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   /// Bloom + flying petal size vs original art (seed stays relatively small).
   static const double _floralVisualScale = 1.68;
 
+  static const double _dustPixelsPerParticle = 138;
+  static const int _dustMinCount = 2200;
+  static const int _dustMaxCount = 7800;
+  static const double _dustMagnetAccel = 5200;
+  static const double _dustMagnetVelDamp = 0.991;
+  static const double _dustMagnetMaxSpeed = 1180;
+  static const double _dustSpringK = 38;
+  static const double _dustSpringDamp = 11.5;
+  static const double _dustFloatAmpPx = 5.2;
+  static const double _dustFloatOmega = 1.05;
+
   bool get hasActiveEffects =>
       _ripples.isNotEmpty ||
       _stars.isNotEmpty ||
       _jellies.isNotEmpty ||
       _notationBits.isNotEmpty ||
       _floralCores.isNotEmpty ||
-      _flowerPetals.isNotEmpty;
+      _flowerPetals.isNotEmpty ||
+      _dustCount > 0;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
     handleTapWithPitch(localPosition, areaSize, mode, null);
@@ -97,8 +131,36 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       case GameplayMode.floralBloom:
         _spawnFloralBloom(localPosition);
         break;
+      case GameplayMode.magneticDust:
+        break;
     }
     _ensureTicker();
+  }
+
+  void magneticTouchDown(Offset local, int pointerId) {
+    _magnetActive = true;
+    _magnetPointerId = pointerId;
+    _magnetX = local.dx;
+    _magnetY = local.dy;
+    _ensureTicker();
+    notifyListeners();
+  }
+
+  void magneticTouchMove(Offset local, int pointerId) {
+    if (!_magnetActive || _magnetPointerId != pointerId) {
+      return;
+    }
+    _magnetX = local.dx;
+    _magnetY = local.dy;
+  }
+
+  void magneticTouchUp(int pointerId) {
+    if (_magnetPointerId != pointerId) {
+      return;
+    }
+    _magnetActive = false;
+    _magnetPointerId = null;
+    notifyListeners();
   }
 
   void _spawnRipples(Offset origin, Size areaSize, Color strokeColor) {
@@ -212,6 +274,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updateNotationBits(dtMs);
     _updateFloralCores(dtMs);
     _updateFlowerPetals(dtMs);
+    if (_dustCount > 0) {
+      _updateMagneticDust(dtMs);
+    }
 
     if (hasActiveEffects) {
       notifyListeners();
@@ -503,10 +568,17 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       _ticker.stop();
     }
     _ticker.dispose();
+    _disposeMagneticDust();
     super.dispose();
   }
 
-  void paint(Canvas canvas, Size size) {
+  void paint(Canvas canvas, Size size, GameplayMode activeMode) {
+    if (activeMode != GameplayMode.magneticDust) {
+      _disposeMagneticDust();
+    } else {
+      _ensureMagneticDust(size);
+    }
+
     final Rect rect = Offset.zero & size;
     final Paint bg = Paint()..color = TiptipColors.background;
     canvas.drawRect(rect, bg);
@@ -529,6 +601,154 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     for (final _StarParticle p in _stars) {
       _paintStarParticle(canvas, p);
     }
+    if (activeMode == GameplayMode.magneticDust && _dustCount > 0) {
+      _paintMagneticDust(canvas);
+    }
+
+    if (activeMode == GameplayMode.magneticDust && _dustCount > 0) {
+      _ensureTicker();
+    }
+  }
+
+  void _ensureMagneticDust(Size size) {
+    if (size.width < 8 || size.height < 8) {
+      return;
+    }
+    final int targetCount =
+        ((size.width * size.height) / _dustPixelsPerParticle)
+            .floor()
+            .clamp(_dustMinCount, _dustMaxCount);
+    final bool sameLayout =
+        _dustCount == targetCount &&
+        (size.width - _dustLayoutW).abs() < 0.5 &&
+        (size.height - _dustLayoutH).abs() < 0.5;
+    if (sameLayout && _dustPos != null) {
+      return;
+    }
+
+    _disposeMagneticDust();
+    _dustLayoutW = size.width;
+    _dustLayoutH = size.height;
+    _dustCount = targetCount;
+    _dustPos = Float32List(targetCount * 2);
+    _dustHome = Float32List(targetCount * 2);
+    _dustVel = Float32List(targetCount * 2);
+    _dustPhase = Float32List(targetCount);
+
+    final math.Random dustRng = math.Random();
+    for (int i = 0; i < targetCount; i++) {
+      final double x = dustRng.nextDouble() * size.width;
+      final double y = dustRng.nextDouble() * size.height;
+      final int i2 = i * 2;
+      _dustHome![i2] = x;
+      _dustHome![i2 + 1] = y;
+      _dustPos![i2] = x;
+      _dustPos![i2 + 1] = y;
+      _dustVel![i2] = 0;
+      _dustVel![i2 + 1] = 0;
+      _dustPhase![i] = dustRng.nextDouble() * math.pi * 2;
+    }
+    _dustTimeSec = 0;
+    _ensureTicker();
+  }
+
+  void _disposeMagneticDust() {
+    if (_dustCount == 0) {
+      return;
+    }
+    _magnetActive = false;
+    _magnetPointerId = null;
+    _dustPos = null;
+    _dustHome = null;
+    _dustVel = null;
+    _dustPhase = null;
+    _dustCount = 0;
+    _dustLayoutW = 0;
+    _dustLayoutH = 0;
+  }
+
+  void _updateMagneticDust(double dtMs) {
+    final Float32List? pos = _dustPos;
+    final Float32List? home = _dustHome;
+    final Float32List? vel = _dustVel;
+    final Float32List? phase = _dustPhase;
+    if (pos == null ||
+        home == null ||
+        vel == null ||
+        phase == null ||
+        _dustCount <= 0) {
+      return;
+    }
+
+    final double dt = dtMs / 1000.0;
+    _dustTimeSec += dt;
+
+    if (_magnetActive) {
+      for (int i = 0; i < _dustCount; i++) {
+        final int k = i * 2;
+        double x = pos[k];
+        double y = pos[k + 1];
+        double vx = vel[k];
+        double vy = vel[k + 1];
+        final double dx = _magnetX - x;
+        final double dy = _magnetY - y;
+        final double distSq = dx * dx + dy * dy + 100;
+        final double inv = 1.0 / math.sqrt(distSq);
+        final double ax = dx * inv * _dustMagnetAccel;
+        final double ay = dy * inv * _dustMagnetAccel;
+        vx = vx * _dustMagnetVelDamp + ax * dt;
+        vy = vy * _dustMagnetVelDamp + ay * dt;
+        final double v2 = vx * vx + vy * vy;
+        final double maxS = _dustMagnetMaxSpeed;
+        if (v2 > maxS * maxS) {
+          final double s = maxS / math.sqrt(v2);
+          vx *= s;
+          vy *= s;
+        }
+        x += vx * dt;
+        y += vy * dt;
+        pos[k] = x;
+        pos[k + 1] = y;
+        vel[k] = vx;
+        vel[k + 1] = vy;
+      }
+    } else {
+      final double t = _dustTimeSec;
+      for (int i = 0; i < _dustCount; i++) {
+        final int k = i * 2;
+        final double hx = home[k];
+        final double hy = home[k + 1];
+        double x = pos[k];
+        double y = pos[k + 1];
+        double vx = vel[k];
+        double vy = vel[k + 1];
+        final double ph = phase[i];
+        final double tx =
+            hx + _dustFloatAmpPx * math.sin(_dustFloatOmega * t + ph);
+        final double ty =
+            hy +
+            _dustFloatAmpPx *
+                math.cos(_dustFloatOmega * 0.91 * t + ph * 1.27);
+        final double ax = _dustSpringK * (tx - x) - _dustSpringDamp * vx;
+        final double ay = _dustSpringK * (ty - y) - _dustSpringDamp * vy;
+        vx += ax * dt;
+        vy += ay * dt;
+        x += vx * dt;
+        y += vy * dt;
+        pos[k] = x;
+        pos[k + 1] = y;
+        vel[k] = vx;
+        vel[k + 1] = vy;
+      }
+    }
+  }
+
+  void _paintMagneticDust(Canvas canvas) {
+    final Float32List? pos = _dustPos;
+    if (pos == null || _dustCount <= 0) {
+      return;
+    }
+    canvas.drawRawPoints(ui.PointMode.points, pos, _dustVertexPaint);
   }
 
   void _paintRippleRing(Canvas canvas, _RippleRing r) {
@@ -965,15 +1185,17 @@ class _StarParticle {
 
 /// [PlayAreaAnimationEngine] çizimini [repaint] ile bağlar.
 class PlayAreaPainter extends CustomPainter {
-  PlayAreaPainter(this.engine) : super(repaint: engine);
+  PlayAreaPainter(this.engine, this.activeMode) : super(repaint: engine);
 
   final PlayAreaAnimationEngine engine;
+  final GameplayMode activeMode;
 
   @override
   void paint(Canvas canvas, Size size) {
-    engine.paint(canvas, size);
+    engine.paint(canvas, size, activeMode);
   }
 
   @override
-  bool shouldRepaint(covariant PlayAreaPainter oldDelegate) => false;
+  bool shouldRepaint(covariant PlayAreaPainter oldDelegate) =>
+      oldDelegate.activeMode != activeMode;
 }
