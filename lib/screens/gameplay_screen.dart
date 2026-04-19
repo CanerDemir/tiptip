@@ -140,7 +140,7 @@ class _GameplayScreenState extends State<GameplayScreen>
       case GameplayMode.star:
         unawaited(GameplaySfx.instance.playStarTwinkle());
         break;
-      case GameplayMode.geometric:
+      case GameplayMode.jelly:
         break;
     }
     _playEngine.handleTap(details.localPosition, areaSize, mode);

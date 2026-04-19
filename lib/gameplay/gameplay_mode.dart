@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-enum GameplayMode { water, star, geometric }
+enum GameplayMode { water, star, jelly }
 
 extension GameplayModeVisual on GameplayMode {
   IconData get icon {
@@ -9,8 +9,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.water_drop_rounded;
       case GameplayMode.star:
         return Icons.star_rounded;
-      case GameplayMode.geometric:
-        return Icons.hexagon_outlined;
+      case GameplayMode.jelly:
+        return Icons.bubble_chart_rounded;
     }
   }
 
@@ -20,8 +20,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFF0284C7);
       case GameplayMode.star:
         return const Color(0xFFEAB308);
-      case GameplayMode.geometric:
-        return const Color(0xFF7C3AED);
+      case GameplayMode.jelly:
+        return const Color(0xFFEC4899);
     }
   }
 
@@ -31,8 +31,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Water mode';
       case GameplayMode.star:
         return 'Star mode';
-      case GameplayMode.geometric:
-        return 'Geometric mode';
+      case GameplayMode.jelly:
+        return 'Jelly wobble mode';
     }
   }
 }

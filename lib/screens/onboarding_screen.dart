@@ -144,9 +144,9 @@ class _Body extends StatelessWidget {
               ),
               _ModeIconCircle(
                 diameter: modeIconDiameter,
-                mode: GameplayMode.geometric,
-                isSelected: selectedMode == GameplayMode.geometric,
-                onTap: () => onModeSelected(GameplayMode.geometric),
+                mode: GameplayMode.jelly,
+                isSelected: selectedMode == GameplayMode.jelly,
+                onTap: () => onModeSelected(GameplayMode.jelly),
               ),
             ],
           ),
