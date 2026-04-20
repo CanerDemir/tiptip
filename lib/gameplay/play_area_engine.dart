@@ -83,6 +83,27 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     ..isAntiAlias = true
     ..blendMode = BlendMode.srcOver;
 
+  Float32List? _fireflyPos;
+  Float32List? _fireflyVel;
+  Float32List? _fireflyPhase;
+  Float32List? _fireflySize;
+  int _fireflyCount = 0;
+  double _fireflyLayoutW = 0;
+  double _fireflyLayoutH = 0;
+  bool _fireflyAttractActive = false;
+  double _fireflyX = 0;
+  double _fireflyY = 0;
+  int? _fireflyPointerId;
+  double _fireflyTimeSec = 0;
+
+  final Paint _fireflyOuterPaint = Paint()
+    ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6)
+    ..isAntiAlias = true;
+  final Paint _fireflyInnerPaint = Paint()
+    ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.4)
+    ..isAntiAlias = true;
+  final Paint _fireflyCorePaint = Paint()..isAntiAlias = true;
+
   Duration? _lastElapsed;
   bool _ticking = false;
 
@@ -112,6 +133,25 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   static const double _dustSpringDamp = 11.5;
   static const double _dustFloatAmpPx = 5.2;
   static const double _dustFloatOmega = 1.05;
+
+  // Firefly swarm: dozens of ambient glowing orbs that accelerate toward a
+  // held touch and drift+flicker when released.
+  static const double _fireflyPixelsPerParticle = 9500;
+  static const int _fireflyMinCount = 48;
+  static const int _fireflyMaxCount = 150;
+  static const double _fireflyAttractAccel = 2400;
+  static const double _fireflyAttractDamp = 0.93;
+  static const double _fireflySwirl = 0.38;
+  static const double _fireflyMaxSpeed = 520;
+  static const double _fireflyDriftDamp = 0.994;
+  static const double _fireflyWanderAccelPx = 10;
+  static const double _fireflyWanderOmega = 0.55;
+  static const double _fireflyReleaseSpeedMin = 80;
+  static const double _fireflyReleaseSpeedMax = 190;
+  static const double _fireflyReleaseAngleJitter = 0.9;
+  static const Color _fireflyBgColor = Color(0xFF1F2233);
+  static const Color _fireflyHaloColor = Color(0xFFFBBF24);
+  static const Color _fireflyInnerColor = Color(0xFFFFEF6E);
 
   static const double _bubbleRadiusMin = 22;
   static const double _bubbleRadiusMax = 46;
@@ -173,7 +213,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       _bubbles.isNotEmpty ||
       _bubbleShards.isNotEmpty ||
       _paintSplats.isNotEmpty ||
-      _dustCount > 0;
+      _dustCount > 0 ||
+      _fireflyCount > 0;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
     handleTapWithPitch(localPosition, areaSize, mode, null);
@@ -211,6 +252,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         return;
       case GameplayMode.paintSplat:
         _spawnPaintSplat(localPosition);
+        break;
+      case GameplayMode.fireflyGlow:
         break;
     }
     _ensureTicker();
@@ -359,6 +402,72 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Firefly Glow: touch-down begins the swarm attraction at [local].
+  void fireflyTouchDown(Offset local, int pointerId) {
+    _fireflyAttractActive = true;
+    _fireflyPointerId = pointerId;
+    _fireflyX = local.dx;
+    _fireflyY = local.dy;
+    _ensureTicker();
+    notifyListeners();
+  }
+
+  /// Firefly Glow: move the swarm target while the finger is down.
+  void fireflyTouchMove(Offset local, int pointerId) {
+    if (!_fireflyAttractActive || _fireflyPointerId != pointerId) {
+      return;
+    }
+    _fireflyX = local.dx;
+    _fireflyY = local.dy;
+  }
+
+  /// Firefly Glow: on release, give each firefly an outward-radial impulse
+  /// (with a small random angular jitter) so they scatter and drift.
+  void fireflyTouchUp(int pointerId) {
+    if (_fireflyPointerId != pointerId) {
+      return;
+    }
+    _fireflyAttractActive = false;
+    _fireflyPointerId = null;
+    _applyFireflyReleaseImpulse();
+    notifyListeners();
+  }
+
+  void _applyFireflyReleaseImpulse() {
+    final Float32List? pos = _fireflyPos;
+    final Float32List? vel = _fireflyVel;
+    if (pos == null || vel == null || _fireflyCount <= 0) {
+      return;
+    }
+    for (int i = 0; i < _fireflyCount; i++) {
+      final int k = i * 2;
+      final double dx = pos[k] - _fireflyX;
+      final double dy = pos[k + 1] - _fireflyY;
+      final double dist = math.sqrt(dx * dx + dy * dy);
+      double nx;
+      double ny;
+      if (dist < 0.001) {
+        final double a = _rng.nextDouble() * math.pi * 2;
+        nx = math.cos(a);
+        ny = math.sin(a);
+      } else {
+        nx = dx / dist;
+        ny = dy / dist;
+      }
+      final double jitter =
+          (_rng.nextDouble() - 0.5) * _fireflyReleaseAngleJitter;
+      final double ca = math.cos(jitter);
+      final double sa = math.sin(jitter);
+      final double rx = nx * ca - ny * sa;
+      final double ry = nx * sa + ny * ca;
+      final double speed = _fireflyReleaseSpeedMin +
+          _rng.nextDouble() *
+              (_fireflyReleaseSpeedMax - _fireflyReleaseSpeedMin);
+      vel[k] = rx * speed;
+      vel[k + 1] = ry * speed;
+    }
+  }
+
   void _spawnRipples(Offset origin, Size areaSize) {
     final double maxR = _rippleMaxRadiusToEdges(origin, areaSize);
     final int ringCount = 3 + _rng.nextInt(2);
@@ -490,6 +599,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updatePaintSplats(dtMs);
     if (_dustCount > 0) {
       _updateMagneticDust(dtMs);
+    }
+    if (_fireflyCount > 0) {
+      _updateFireflies(dtMs);
     }
 
     if (hasActiveEffects) {
@@ -853,6 +965,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     }
     _ticker.dispose();
     _disposeMagneticDust();
+    _disposeFireflies();
     super.dispose();
   }
 
@@ -862,9 +975,17 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     } else {
       _ensureMagneticDust(size);
     }
+    if (activeMode != GameplayMode.fireflyGlow) {
+      _disposeFireflies();
+    } else {
+      _ensureFireflies(size);
+    }
 
     final Rect rect = Offset.zero & size;
-    final Paint bg = Paint()..color = TiptipColors.background;
+    final Color bgColor = activeMode == GameplayMode.fireflyGlow
+        ? _fireflyBgColor
+        : TiptipColors.background;
+    final Paint bg = Paint()..color = bgColor;
     canvas.drawRect(rect, bg);
 
     // NOTE: paint splats are deliberately NOT drawn here. They render through
@@ -899,8 +1020,12 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     if (activeMode == GameplayMode.magneticDust && _dustCount > 0) {
       _paintMagneticDust(canvas);
     }
+    if (activeMode == GameplayMode.fireflyGlow && _fireflyCount > 0) {
+      _paintFireflies(canvas);
+    }
 
-    if (activeMode == GameplayMode.magneticDust && _dustCount > 0) {
+    if ((activeMode == GameplayMode.magneticDust && _dustCount > 0) ||
+        (activeMode == GameplayMode.fireflyGlow && _fireflyCount > 0)) {
       _ensureTicker();
     }
   }
@@ -1044,6 +1169,183 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       return;
     }
     canvas.drawRawPoints(ui.PointMode.points, pos, _dustVertexPaint);
+  }
+
+  void _ensureFireflies(Size size) {
+    if (size.width < 8 || size.height < 8) {
+      return;
+    }
+    final int targetCount =
+        ((size.width * size.height) / _fireflyPixelsPerParticle)
+            .floor()
+            .clamp(_fireflyMinCount, _fireflyMaxCount);
+    final bool sameLayout =
+        _fireflyCount == targetCount &&
+        (size.width - _fireflyLayoutW).abs() < 0.5 &&
+        (size.height - _fireflyLayoutH).abs() < 0.5;
+    if (sameLayout && _fireflyPos != null) {
+      return;
+    }
+
+    _disposeFireflies();
+    _fireflyLayoutW = size.width;
+    _fireflyLayoutH = size.height;
+    _fireflyCount = targetCount;
+    _fireflyPos = Float32List(targetCount * 2);
+    _fireflyVel = Float32List(targetCount * 2);
+    _fireflyPhase = Float32List(targetCount);
+    _fireflySize = Float32List(targetCount);
+
+    final math.Random r = math.Random();
+    for (int i = 0; i < targetCount; i++) {
+      final int k = i * 2;
+      _fireflyPos![k] = r.nextDouble() * size.width;
+      _fireflyPos![k + 1] = r.nextDouble() * size.height;
+      final double vAngle = r.nextDouble() * math.pi * 2;
+      final double vSpeed = 8 + r.nextDouble() * 18;
+      _fireflyVel![k] = math.cos(vAngle) * vSpeed;
+      _fireflyVel![k + 1] = math.sin(vAngle) * vSpeed;
+      _fireflyPhase![i] = r.nextDouble() * math.pi * 2;
+      _fireflySize![i] = 1.8 + r.nextDouble() * 1.6;
+    }
+    _fireflyTimeSec = 0;
+    _ensureTicker();
+  }
+
+  void _disposeFireflies() {
+    if (_fireflyCount == 0) {
+      return;
+    }
+    _fireflyAttractActive = false;
+    _fireflyPointerId = null;
+    _fireflyPos = null;
+    _fireflyVel = null;
+    _fireflyPhase = null;
+    _fireflySize = null;
+    _fireflyCount = 0;
+    _fireflyLayoutW = 0;
+    _fireflyLayoutH = 0;
+  }
+
+  void _updateFireflies(double dtMs) {
+    final Float32List? pos = _fireflyPos;
+    final Float32List? vel = _fireflyVel;
+    final Float32List? phase = _fireflyPhase;
+    if (pos == null || vel == null || phase == null || _fireflyCount <= 0) {
+      return;
+    }
+
+    final double dt = dtMs / 1000.0;
+    _fireflyTimeSec += dt;
+    final double w = _fireflyLayoutW;
+    final double h = _fireflyLayoutH;
+    final double wrapMargin = 28.0;
+
+    if (_fireflyAttractActive) {
+      final double tx = _fireflyX;
+      final double ty = _fireflyY;
+      for (int i = 0; i < _fireflyCount; i++) {
+        final int k = i * 2;
+        double x = pos[k];
+        double y = pos[k + 1];
+        double vx = vel[k];
+        double vy = vel[k + 1];
+        final double dx = tx - x;
+        final double dy = ty - y;
+        // Soften denominator so fireflies orbit the target rather than
+        // collapse into a single pixel — the "swarm" feel.
+        final double distSq = dx * dx + dy * dy + 900;
+        final double inv = 1.0 / math.sqrt(distSq);
+        final double ax = dx * inv * _fireflyAttractAccel;
+        final double ay = dy * inv * _fireflyAttractAccel;
+        // Tangential component (perpendicular) adds orbital swirl.
+        final double sx = -dy * inv * _fireflyAttractAccel * _fireflySwirl;
+        final double sy = dx * inv * _fireflyAttractAccel * _fireflySwirl;
+        vx = (vx + (ax + sx) * dt) * _fireflyAttractDamp;
+        vy = (vy + (ay + sy) * dt) * _fireflyAttractDamp;
+
+        final double v2 = vx * vx + vy * vy;
+        if (v2 > _fireflyMaxSpeed * _fireflyMaxSpeed) {
+          final double s = _fireflyMaxSpeed / math.sqrt(v2);
+          vx *= s;
+          vy *= s;
+        }
+        x += vx * dt;
+        y += vy * dt;
+        pos[k] = x;
+        pos[k + 1] = y;
+        vel[k] = vx;
+        vel[k + 1] = vy;
+      }
+    } else {
+      final double t = _fireflyTimeSec;
+      for (int i = 0; i < _fireflyCount; i++) {
+        final int k = i * 2;
+        double x = pos[k];
+        double y = pos[k + 1];
+        double vx = vel[k];
+        double vy = vel[k + 1];
+        final double ph = phase[i];
+        // Gentle wandering drift (keeps fireflies alive-looking while idle).
+        vx += math.cos(_fireflyWanderOmega * t + ph) *
+            _fireflyWanderAccelPx *
+            dt;
+        vy += math.sin(_fireflyWanderOmega * 0.87 * t + ph * 1.3) *
+            _fireflyWanderAccelPx *
+            dt;
+        vx *= _fireflyDriftDamp;
+        vy *= _fireflyDriftDamp;
+
+        x += vx * dt;
+        y += vy * dt;
+
+        // Wrap around edges so the swarm doesn't leak off-canvas after the
+        // release impulse pushes some fireflies off-screen.
+        if (x < -wrapMargin) x += w + wrapMargin * 2;
+        if (x > w + wrapMargin) x -= w + wrapMargin * 2;
+        if (y < -wrapMargin) y += h + wrapMargin * 2;
+        if (y > h + wrapMargin) y -= h + wrapMargin * 2;
+
+        pos[k] = x;
+        pos[k + 1] = y;
+        vel[k] = vx;
+        vel[k + 1] = vy;
+      }
+    }
+  }
+
+  void _paintFireflies(Canvas canvas) {
+    final Float32List? pos = _fireflyPos;
+    final Float32List? phase = _fireflyPhase;
+    final Float32List? size = _fireflySize;
+    if (pos == null || phase == null || size == null || _fireflyCount <= 0) {
+      return;
+    }
+    final double t = _fireflyTimeSec;
+    final Paint outer = _fireflyOuterPaint;
+    final Paint inner = _fireflyInnerPaint;
+    final Paint core = _fireflyCorePaint;
+    for (int i = 0; i < _fireflyCount; i++) {
+      final int k = i * 2;
+      final double x = pos[k];
+      final double y = pos[k + 1];
+      final double sz = size[i];
+      final double ph = phase[i];
+      // Per-firefly flicker — unique phase + speed gives asynchronous twinkle.
+      final double flickRaw =
+          0.58 + 0.42 * math.sin(t * (2.2 + (ph % 1.0) * 1.4) + ph * 2.0);
+      final double a = flickRaw.clamp(0.18, 1.0);
+      final Offset c = Offset(x, y);
+
+      outer.color = _fireflyHaloColor.withValues(alpha: 0.22 * a);
+      canvas.drawCircle(c, sz * 4.6, outer);
+
+      inner.color = _fireflyInnerColor.withValues(alpha: 0.62 * a);
+      canvas.drawCircle(c, sz * 2.0, inner);
+
+      core.color = Colors.white.withValues(alpha: 0.95 * a);
+      canvas.drawCircle(c, sz * 0.8, core);
+    }
   }
 
   void _paintRippleRing(Canvas canvas, _RippleRing r) {

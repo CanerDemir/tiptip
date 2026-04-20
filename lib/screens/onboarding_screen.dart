@@ -191,6 +191,13 @@ class _Body extends StatelessWidget {
                         isSelected: selectedMode == GameplayMode.paintSplat,
                         onTap: () => onModeSelected(GameplayMode.paintSplat),
                       ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.fireflyGlow,
+                        isSelected: selectedMode == GameplayMode.fireflyGlow,
+                        onTap: () => onModeSelected(GameplayMode.fireflyGlow),
+                      ),
                     ],
                   ),
                 ),

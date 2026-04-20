@@ -174,6 +174,9 @@ class _GameplayScreenState extends State<GameplayScreen>
         // spring-expansion of the blob.
         unawaited(GameplaySfx.instance.playPaintPlop());
         break;
+      case GameplayMode.fireflyGlow:
+        HapticFeedback.selectionClick();
+        break;
     }
     _playEngine.handleTapWithPitch(
       localPosition,
@@ -253,6 +256,12 @@ class _GameplayScreenState extends State<GameplayScreen>
                           e.localPosition,
                           e.pointer,
                         );
+                      } else if (mode == GameplayMode.fireflyGlow) {
+                        HapticFeedback.selectionClick();
+                        _playEngine.fireflyTouchDown(
+                          e.localPosition,
+                          e.pointer,
+                        );
                       } else if (mode == GameplayMode.soapBubbles) {
                         _triggerSoapBubbleTap(e.localPosition);
                       } else {
@@ -260,9 +269,15 @@ class _GameplayScreenState extends State<GameplayScreen>
                       }
                     },
                     onPointerMove: (PointerMoveEvent e) {
-                      if (GameplayMode.values[_activeModeIndex] ==
-                          GameplayMode.magneticDust) {
+                      final GameplayMode mode =
+                          GameplayMode.values[_activeModeIndex];
+                      if (mode == GameplayMode.magneticDust) {
                         _playEngine.magneticTouchMove(
+                          e.localPosition,
+                          e.pointer,
+                        );
+                      } else if (mode == GameplayMode.fireflyGlow) {
+                        _playEngine.fireflyTouchMove(
                           e.localPosition,
                           e.pointer,
                         );
@@ -270,9 +285,11 @@ class _GameplayScreenState extends State<GameplayScreen>
                     },
                     onPointerUp: (PointerUpEvent e) {
                       _playEngine.magneticTouchUp(e.pointer);
+                      _playEngine.fireflyTouchUp(e.pointer);
                     },
                     onPointerCancel: (PointerCancelEvent e) {
                       _playEngine.magneticTouchUp(e.pointer);
+                      _playEngine.fireflyTouchUp(e.pointer);
                     },
                     child: _PlayAreaStack(
                       engine: _playEngine,

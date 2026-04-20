@@ -9,6 +9,7 @@ enum GameplayMode {
   magneticDust,
   soapBubbles,
   paintSplat,
+  fireflyGlow,
 }
 
 extension GameplayModeVisual on GameplayMode {
@@ -30,6 +31,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.circle_outlined;
       case GameplayMode.paintSplat:
         return Icons.palette_rounded;
+      case GameplayMode.fireflyGlow:
+        return Icons.auto_awesome_rounded;
     }
   }
 
@@ -51,6 +54,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFF7DD3FC);
       case GameplayMode.paintSplat:
         return const Color(0xFFFB923C);
+      case GameplayMode.fireflyGlow:
+        return const Color(0xFFFBBF24);
     }
   }
 
@@ -72,6 +77,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Soap bubbles mode';
       case GameplayMode.paintSplat:
         return 'Paint splat mode';
+      case GameplayMode.fireflyGlow:
+        return 'Firefly glow mode';
     }
   }
 }
