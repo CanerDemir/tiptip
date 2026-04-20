@@ -7,6 +7,7 @@ enum GameplayMode {
   musicalRain,
   floralBloom,
   magneticDust,
+  soapBubbles,
 }
 
 extension GameplayModeVisual on GameplayMode {
@@ -24,6 +25,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.local_florist_rounded;
       case GameplayMode.magneticDust:
         return Icons.blur_on_rounded;
+      case GameplayMode.soapBubbles:
+        return Icons.circle_outlined;
     }
   }
 
@@ -41,6 +44,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFFE879A9);
       case GameplayMode.magneticDust:
         return const Color(0xFF8B7EC8);
+      case GameplayMode.soapBubbles:
+        return const Color(0xFF7DD3FC);
     }
   }
 
@@ -58,6 +63,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Floral bloom mode';
       case GameplayMode.magneticDust:
         return 'Magnetic dust mode';
+      case GameplayMode.soapBubbles:
+        return 'Soap bubbles mode';
     }
   }
 }

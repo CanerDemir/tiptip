@@ -158,6 +158,8 @@ class _GameplayScreenState extends State<GameplayScreen>
         break;
       case GameplayMode.magneticDust:
         break;
+      case GameplayMode.soapBubbles:
+        break;
     }
     _playEngine.handleTapWithPitch(
       localPosition,
@@ -165,6 +167,22 @@ class _GameplayScreenState extends State<GameplayScreen>
       mode,
       pitchClass,
     );
+  }
+
+  void _triggerSoapBubbleTap(Offset localPosition) {
+    // Hit test: if we pop an existing bubble, play the pop SFX + stronger
+    // haptic; otherwise just softly acknowledge spawning a new bubble.
+    final BubbleTapResult result =
+        _playEngine.handleBubbleTap(localPosition);
+    switch (result) {
+      case BubbleTapResult.popped:
+        HapticFeedback.lightImpact();
+        unawaited(GameplaySfx.instance.playBubblePop());
+        break;
+      case BubbleTapResult.spawned:
+        HapticFeedback.selectionClick();
+        break;
+    }
   }
 
   int _nextRainPitchClass() {
@@ -221,6 +239,8 @@ class _GameplayScreenState extends State<GameplayScreen>
                           e.localPosition,
                           e.pointer,
                         );
+                      } else if (mode == GameplayMode.soapBubbles) {
+                        _triggerSoapBubbleTap(e.localPosition);
                       } else {
                         _triggerModeTap(mode, e.localPosition, areaSize);
                       }

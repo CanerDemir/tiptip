@@ -10,6 +10,11 @@ import 'gameplay_mode.dart';
 import 'object_pool.dart';
 
 /// Oyun alanı animasyon durumu — [CustomPaint.repaint] ile bağlanır.
+///
+/// Water ripples: [Ticker] sürücülü aktif halka listesi (bellek için havuz);
+/// her dokunuşta 3–4 gecikmeli halka, köşeye kadar genişleme ve tamamlanınca listeden çıkarılır.
+///
+/// Star burst: dokunuş başına 5–8 parçacık, [ObjectPool] ile geri dönüşüm.
 class PlayAreaAnimationEngine extends ChangeNotifier {
   PlayAreaAnimationEngine(this.tickerProvider) {
     _ticker = tickerProvider.createTicker(_onTick);
@@ -36,6 +41,12 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final ObjectPool<_FlowerPetal> _petalPool = ObjectPool<_FlowerPetal>(
     _FlowerPetal.new,
   );
+  final ObjectPool<_SoapBubble> _bubblePool = ObjectPool<_SoapBubble>(
+    _SoapBubble.new,
+  );
+  final ObjectPool<_BubbleShard> _shardPool = ObjectPool<_BubbleShard>(
+    _BubbleShard.new,
+  );
 
   final List<_RippleRing> _ripples = <_RippleRing>[];
   final List<_StarParticle> _stars = <_StarParticle>[];
@@ -43,6 +54,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final List<_NotationBit> _notationBits = <_NotationBit>[];
   final List<_FloralCore> _floralCores = <_FloralCore>[];
   final List<_FlowerPetal> _flowerPetals = <_FlowerPetal>[];
+  final List<_SoapBubble> _bubbles = <_SoapBubble>[];
+  final List<_BubbleShard> _bubbleShards = <_BubbleShard>[];
   final math.Random _rng = math.Random();
 
   Float32List? _dustPos;
@@ -69,12 +82,15 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   Duration? _lastElapsed;
   bool _ticking = false;
 
-  static const int _ringsPerTap = 4;
-  static const double _rippleDurationMs = 1650;
-  static const double _ringStaggerMs = 95;
-  static const int _starCount = 14;
-  static const double _starLifeMs = 980;
-  static const double _starBaseSpeed = 220;
+  static const double _rippleDurationMs = 1550;
+  static const double _ringStaggerMs = 112;
+  static const double _rippleStrokePx = 2.0;
+  static const double _rippleOpacityStart = 0.6;
+  static const Color _rippleCyanSoft = Color(0xFF9FE8FF);
+  static const Color _rippleCyanDeep = Color(0xFF4AB8E8);
+  static const double _starLifeMs = 1050;
+  static const double _starSpeedMin = 175;
+  static const double _starSpeedMax = 340;
   static const int _notationBurstCount = 10;
   static const double _floralSeedMs = 220;
   static const double _floralBloomMs = 520;
@@ -93,6 +109,17 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   static const double _dustFloatAmpPx = 5.2;
   static const double _dustFloatOmega = 1.05;
 
+  static const double _bubbleRadiusMin = 22;
+  static const double _bubbleRadiusMax = 46;
+  static const double _bubbleRiseSpeedMin = 32;
+  static const double _bubbleRiseSpeedMax = 58;
+  static const double _bubbleSwayAmpMin = 14;
+  static const double _bubbleSwayAmpMax = 32;
+  static const double _bubbleSwayFreqMin = 0.65;
+  static const double _bubbleSwayFreqMax = 1.25;
+  static const double _bubblePopLifeMs = 260;
+  static const int _bubbleShardCount = 8;
+
   bool get hasActiveEffects =>
       _ripples.isNotEmpty ||
       _stars.isNotEmpty ||
@@ -100,6 +127,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       _notationBits.isNotEmpty ||
       _floralCores.isNotEmpty ||
       _flowerPetals.isNotEmpty ||
+      _bubbles.isNotEmpty ||
+      _bubbleShards.isNotEmpty ||
       _dustCount > 0;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
@@ -114,7 +143,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   ) {
     switch (mode) {
       case GameplayMode.water:
-        _spawnRipples(localPosition, areaSize, const Color(0xFF0284C7));
+        _spawnRipples(localPosition, areaSize);
         break;
       case GameplayMode.star:
         _spawnStarBurst(localPosition);
@@ -133,8 +162,86 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         break;
       case GameplayMode.magneticDust:
         break;
+      case GameplayMode.soapBubbles:
+        handleBubbleTap(localPosition);
+        return;
     }
     _ensureTicker();
+  }
+
+  /// Soap Bubbles: tapping on an existing bubble pops it, otherwise spawns one.
+  BubbleTapResult handleBubbleTap(Offset localPosition) {
+    for (int i = _bubbles.length - 1; i >= 0; i--) {
+      final _SoapBubble b = _bubbles[i];
+      if (b.popping) {
+        continue;
+      }
+      final double dx = localPosition.dx - b.x;
+      final double dy = localPosition.dy - b.y;
+      final double hitR = b.radius + 6;
+      if (dx * dx + dy * dy <= hitR * hitR) {
+        _startBubblePop(b);
+        _ensureTicker();
+        return BubbleTapResult.popped;
+      }
+    }
+    _spawnBubble(localPosition);
+    _ensureTicker();
+    return BubbleTapResult.spawned;
+  }
+
+  void _spawnBubble(Offset origin) {
+    final _SoapBubble b = _bubblePool.acquire();
+    final double radius = _bubbleRadiusMin +
+        _rng.nextDouble() * (_bubbleRadiusMax - _bubbleRadiusMin);
+    final double rise = _bubbleRiseSpeedMin +
+        _rng.nextDouble() * (_bubbleRiseSpeedMax - _bubbleRiseSpeedMin);
+    final double swayAmp = _bubbleSwayAmpMin +
+        _rng.nextDouble() * (_bubbleSwayAmpMax - _bubbleSwayAmpMin);
+    final double swayFreq = _bubbleSwayFreqMin +
+        _rng.nextDouble() * (_bubbleSwayFreqMax - _bubbleSwayFreqMin);
+    b
+      ..baseX = origin.dx
+      ..x = origin.dx
+      ..y = origin.dy
+      ..radius = radius
+      ..riseSpeed = rise
+      ..swayAmp = swayAmp
+      ..swayFreq = swayFreq
+      ..swayPhase = _rng.nextDouble() * math.pi * 2
+      ..hueSeed = _rng.nextDouble()
+      ..spawnScaleMs = 0
+      ..ageMs = 0
+      ..popping = false
+      ..popAgeMs = 0
+      ..alive = true;
+    _bubbles.add(b);
+    notifyListeners();
+  }
+
+  void _startBubblePop(_SoapBubble b) {
+    if (b.popping) {
+      return;
+    }
+    b.popping = true;
+    b.popAgeMs = 0;
+    for (int i = 0; i < _bubbleShardCount; i++) {
+      final _BubbleShard s = _shardPool.acquire();
+      final double angle =
+          (i / _bubbleShardCount) * math.pi * 2 + _rng.nextDouble() * 0.35;
+      final double speed = 110 + _rng.nextDouble() * 140;
+      s
+        ..x = b.x + math.cos(angle) * b.radius * 0.55
+        ..y = b.y + math.sin(angle) * b.radius * 0.55
+        ..vx = math.cos(angle) * speed
+        ..vy = math.sin(angle) * speed - 40
+        ..size = 1.6 + _rng.nextDouble() * 2.4
+        ..hueSeed = b.hueSeed
+        ..ageMs = 0
+        ..lifeMs = 340 + _rng.nextDouble() * 180
+        ..alive = true;
+      _bubbleShards.add(s);
+    }
   }
 
   void magneticTouchDown(Offset local, int pointerId) {
@@ -163,9 +270,10 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _spawnRipples(Offset origin, Size areaSize, Color strokeColor) {
-    final double maxR = math.min(areaSize.width, areaSize.height) * 0.42;
-    for (int i = 0; i < _ringsPerTap; i++) {
+  void _spawnRipples(Offset origin, Size areaSize) {
+    final double maxR = _rippleMaxRadiusToEdges(origin, areaSize);
+    final int ringCount = 3 + _rng.nextInt(2);
+    for (int i = 0; i < ringCount; i++) {
       final _RippleRing r = _ripplePool.acquire();
       r
         ..center = origin
@@ -173,12 +281,17 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         ..ageMs = 0
         ..durationMs = _rippleDurationMs
         ..maxRadius = maxR
-        ..ringIndex = i
-        ..strokeColor = strokeColor
         ..alive = true;
       _ripples.add(r);
     }
     notifyListeners();
+  }
+
+  /// Dokunuş noktasından oyun alanı köşelerine uzaklığın üst sınırı (tam ekran dalga).
+  double _rippleMaxRadiusToEdges(Offset origin, Size size) {
+    final double dx = math.max(origin.dx, size.width - origin.dx);
+    final double dy = math.max(origin.dy, size.height - origin.dy);
+    return math.sqrt(dx * dx + dy * dy) + 3;
   }
 
   void _spawnJellyWobble(Offset origin, Size areaSize) {
@@ -231,21 +344,30 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  static const List<Color> _starBurstPalette = <Color>[
+    Color(0xFFFFC940),
+    Color(0xFFFFE082),
+    Color(0xFFFFF9C4),
+    Color(0xFFFFFFFF),
+    Color(0xFFFFD54F),
+  ];
+
   void _spawnStarBurst(Offset origin) {
-    final math.Random rng = math.Random();
-    for (int i = 0; i < _starCount; i++) {
+    final int burstCount = 5 + _rng.nextInt(4);
+    for (int i = 0; i < burstCount; i++) {
       final _StarParticle p = _starPool.acquire();
-      final double angle = rng.nextDouble() * math.pi * 2;
-      final double speed = _starBaseSpeed * (0.75 + rng.nextDouble() * 0.55);
+      final double angle = _rng.nextDouble() * math.pi * 2;
+      final double speed =
+          _starSpeedMin + _rng.nextDouble() * (_starSpeedMax - _starSpeedMin);
       p
         ..position = origin
         ..vx = math.cos(angle) * speed
         ..vy = math.sin(angle) * speed
         ..ageMs = 0
-        ..lifeMs = _starLifeMs
-        ..rotation = rng.nextDouble() * math.pi * 2
-        ..spin = (rng.nextBool() ? 1 : -1) * (1.8 + rng.nextDouble() * 2.4)
-        ..hueShift = rng.nextDouble() * 0.15
+        ..lifeMs = _starLifeMs * (0.88 + _rng.nextDouble() * 0.24)
+        ..rotation = _rng.nextDouble() * math.pi * 2
+        ..spin = (_rng.nextBool() ? 1 : -1) * (1.6 + _rng.nextDouble() * 2.6)
+        ..fillColor = _starBurstPalette[_rng.nextInt(_starBurstPalette.length)]
         ..alive = true;
       _stars.add(p);
     }
@@ -274,6 +396,8 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updateNotationBits(dtMs);
     _updateFloralCores(dtMs);
     _updateFlowerPetals(dtMs);
+    _updateBubbles(dtMs);
+    _updateBubbleShards(dtMs);
     if (_dustCount > 0) {
       _updateMagneticDust(dtMs);
     }
@@ -401,6 +525,55 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         ..length = (17 + _rng.nextDouble() * 11) * _floralVisualScale
         ..alive = true;
       _flowerPetals.add(petal);
+    }
+  }
+
+  void _updateBubbles(double dtMs) {
+    final double dtSec = dtMs / 1000.0;
+    for (int i = _bubbles.length - 1; i >= 0; i--) {
+      final _SoapBubble b = _bubbles[i];
+      b.ageMs += dtMs;
+      b.spawnScaleMs += dtMs;
+
+      if (b.popping) {
+        b.popAgeMs += dtMs;
+        if (b.popAgeMs >= _bubblePopLifeMs) {
+          b.alive = false;
+          _bubbles.removeAt(i);
+          _bubblePool.release(b);
+        }
+        continue;
+      }
+
+      b.y -= b.riseSpeed * dtSec;
+      final double t = b.ageMs / 1000.0;
+      b.x = b.baseX + math.sin(t * b.swayFreq * math.pi * 2 + b.swayPhase) *
+          b.swayAmp;
+
+      final double topBound = -b.radius * 1.2;
+      if (b.y < topBound) {
+        b.alive = false;
+        _bubbles.removeAt(i);
+        _bubblePool.release(b);
+      }
+    }
+  }
+
+  void _updateBubbleShards(double dtMs) {
+    final double dtSec = dtMs / 1000.0;
+    for (int i = _bubbleShards.length - 1; i >= 0; i--) {
+      final _BubbleShard s = _bubbleShards[i];
+      s.ageMs += dtMs;
+      s.vx *= 0.965;
+      s.vy *= 0.965;
+      s.vy += 220 * dtSec;
+      s.x += s.vx * dtSec;
+      s.y += s.vy * dtSec;
+      if (s.ageMs >= s.lifeMs) {
+        s.alive = false;
+        _bubbleShards.removeAt(i);
+        _shardPool.release(s);
+      }
     }
   }
 
@@ -601,6 +774,12 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     for (final _StarParticle p in _stars) {
       _paintStarParticle(canvas, p);
     }
+    for (final _SoapBubble b in _bubbles) {
+      _paintSoapBubble(canvas, b);
+    }
+    for (final _BubbleShard s in _bubbleShards) {
+      _paintBubbleShard(canvas, s);
+    }
     if (activeMode == GameplayMode.magneticDust && _dustCount > 0) {
       _paintMagneticDust(canvas);
     }
@@ -759,28 +938,26 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     final double t = (waveAge / r.durationMs).clamp(0.0, 1.0);
     final double eased = Curves.easeOutCubic.transform(t);
     final double radius = eased * r.maxRadius;
-    final double opacity =
-        Curves.easeOut.transform(1 - eased) *
-        (0.58 - r.ringIndex * 0.1).clamp(0.22, 0.58);
+    final double opacity = _rippleOpacityStart * (1.0 - eased);
+    if (opacity <= 0.002) {
+      return;
+    }
+
+    final Color ringColor = Color.lerp(
+      _rippleCyanSoft,
+      _rippleCyanDeep,
+      eased,
+    )!.withValues(alpha: opacity);
 
     final Paint stroke = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.8 + (1.0 - eased) * 2.8
+      ..strokeWidth = _rippleStrokePx
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round
-      ..color = r.strokeColor.withValues(alpha: opacity);
+      ..isAntiAlias = true
+      ..color = ringColor;
 
     canvas.drawCircle(r.center, radius, stroke);
-    canvas.drawCircle(
-      r.center,
-      radius * 0.9,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = stroke.strokeWidth * 0.52
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..color = r.strokeColor.withValues(alpha: opacity * 0.45),
-    );
   }
 
   void _paintJellyWobble(Canvas canvas, _JellyWobble j) {
@@ -1048,26 +1225,25 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
 
   void _paintStarParticle(Canvas canvas, _StarParticle p) {
     final double t = (p.ageMs / p.lifeMs).clamp(0.0, 1.0);
-    final double scale =
-        ui.lerpDouble(0, 1.5, Curves.easeOut.transform(t)) ?? 0;
-    final double opacity = (1.0 - t) * (1.0 - t * 0.35);
-    if (opacity <= 0.01 || scale <= 0.001) {
+    const double scaleWindow = 0.44;
+    final double scaleT = (t / scaleWindow).clamp(0.0, 1.0);
+    final double rawScale = 1.5 * Curves.elasticOut.transform(scaleT);
+    final double scale = rawScale.clamp(0.0, 1.5);
+    final double opacity =
+        1.0 - Curves.easeInCubic.transform(((t - 0.12) / 0.88).clamp(0.0, 1.0));
+    if (opacity <= 0.008 || scale <= 0.001) {
       return;
     }
 
     const double outer = 11;
-    final Color base = Color.lerp(
-      const Color(0xFFFFE082),
-      const Color(0xFFEAB308),
-      p.hueShift,
-    )!;
+    final Color base = p.fillColor;
 
     canvas.save();
     canvas.translate(p.position.dx, p.position.dy);
     canvas.rotate(p.rotation);
     canvas.scale(scale);
 
-    final Path star = _starPath(
+    final Path star = _roundedFivePointStarPath(
       const Offset(0, 0),
       outerR: outer,
       innerR: outer * 0.42,
@@ -1078,30 +1254,206 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       ..color = base.withValues(alpha: opacity);
     final Paint stroke = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
+      ..strokeWidth = 1.15
       ..strokeJoin = StrokeJoin.round
       ..strokeCap = StrokeCap.round
-      ..color = Colors.white.withValues(alpha: opacity * 0.55);
+      ..color = Colors.white.withValues(alpha: opacity * 0.5);
 
     canvas.drawPath(star, fill);
     canvas.drawPath(star, stroke);
     canvas.restore();
   }
 
-  /// Yuvarlatılmış çizgi birleşimli beş köşeli yıldız.
-  Path _starPath(Offset c, {required double outerR, required double innerR}) {
+  static const List<Color> _bubbleIrisPalette = <Color>[
+    Color(0xFFB9E7FF),
+    Color(0xFFDDC4FF),
+    Color(0xFFFFD6F2),
+    Color(0xFFCFFFE8),
+    Color(0xFFFFF2C7),
+  ];
+
+  Color _bubbleTint(double hueSeed, int idx) {
+    final int k = ((hueSeed * 997.0).abs().floor() + idx) %
+        _bubbleIrisPalette.length;
+    return _bubbleIrisPalette[k];
+  }
+
+  void _paintSoapBubble(Canvas canvas, _SoapBubble b) {
+    double scale = 1.0;
+    double alpha = 1.0;
+
+    if (b.popping) {
+      final double pt = (b.popAgeMs / _bubblePopLifeMs).clamp(0.0, 1.0);
+      scale = 1.0 + Curves.easeOutCubic.transform(pt) * 0.38;
+      alpha = (1.0 - Curves.easeIn.transform(pt)).clamp(0.0, 1.0);
+    } else {
+      final double st = (b.spawnScaleMs / 220.0).clamp(0.0, 1.0);
+      scale = Curves.easeOutBack.transform(st).clamp(0.0, 1.2);
+    }
+    if (alpha <= 0.01 || scale <= 0.01) {
+      return;
+    }
+
+    final double r = b.radius * scale;
+    final Offset c = Offset(b.x, b.y);
+
+    // Thin outer glow halo — sells the "glowing rim".
+    final Paint halo = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.4
+      ..color = const Color(0xFFE0F4FF).withValues(alpha: 0.22 * alpha)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4.5);
+    canvas.drawCircle(c, r, halo);
+
+    // Translucent body — soapy milky-white radial gradient. The previously
+    // near-clear interior now gets a soft white wash so the bubble reads as
+    // a filled soap film against any background.
+    final Rect bodyRect = Rect.fromCircle(center: c, radius: r);
+    final Paint body = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.18, -0.22),
+        radius: 1.0,
+        colors: <Color>[
+          Colors.white.withValues(alpha: 0.32 * alpha),
+          Colors.white.withValues(alpha: 0.24 * alpha),
+          Colors.white.withValues(alpha: 0.30 * alpha),
+          Colors.white.withValues(alpha: 0.38 * alpha),
+        ],
+        stops: const <double>[0.0, 0.55, 0.85, 1.0],
+      ).createShader(bodyRect);
+    canvas.drawCircle(c, r, body);
+
+    // Iridescent band — subtle rainbow sweep just inside the rim for the
+    // "Nano Banana" colour-shifted soap sheen.
+    final Paint iris = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = r * 0.18
+      ..shader = SweepGradient(
+        startAngle: b.hueSeed * math.pi * 2,
+        endAngle: b.hueSeed * math.pi * 2 + math.pi * 2,
+        colors: <Color>[
+          _bubbleTint(b.hueSeed, 0).withValues(alpha: 0.22 * alpha),
+          _bubbleTint(b.hueSeed, 1).withValues(alpha: 0.30 * alpha),
+          _bubbleTint(b.hueSeed, 2).withValues(alpha: 0.22 * alpha),
+          _bubbleTint(b.hueSeed, 3).withValues(alpha: 0.30 * alpha),
+          _bubbleTint(b.hueSeed, 4).withValues(alpha: 0.22 * alpha),
+          _bubbleTint(b.hueSeed, 0).withValues(alpha: 0.22 * alpha),
+        ],
+      ).createShader(bodyRect);
+    canvas.drawCircle(c, r * 0.92, iris);
+
+    // Thin crisp rim — the glowing edge outline.
+    final Paint rim = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.25
+      ..color = Colors.white.withValues(alpha: 0.55 * alpha);
+    canvas.drawCircle(c, r, rim);
+
+    // Waxy specular highlight — small bright oval top-left.
+    final Offset sheenCenter = Offset(
+      c.dx - r * 0.36,
+      c.dy - r * 0.42,
+    );
+    final Rect sheenRect = Rect.fromCenter(
+      center: sheenCenter,
+      width: r * 0.78,
+      height: r * 0.42,
+    );
+    final Paint sheen = Paint()
+      ..shader = RadialGradient(
+        colors: <Color>[
+          Colors.white.withValues(alpha: 0.85 * alpha),
+          Colors.white.withValues(alpha: 0.25 * alpha),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const <double>[0.0, 0.55, 1.0],
+      ).createShader(sheenRect);
+    canvas.save();
+    canvas.translate(sheenCenter.dx, sheenCenter.dy);
+    canvas.rotate(-0.55);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset.zero,
+        width: sheenRect.width,
+        height: sheenRect.height,
+      ),
+      sheen,
+    );
+    canvas.restore();
+
+    // Tiny pinpoint glint — extra wet-plastic waxy feel.
+    final Paint glint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.85 * alpha);
+    canvas.drawCircle(
+      Offset(c.dx - r * 0.18, c.dy - r * 0.58),
+      r * 0.07,
+      glint,
+    );
+  }
+
+  void _paintBubbleShard(Canvas canvas, _BubbleShard s) {
+    final double t = (s.ageMs / s.lifeMs).clamp(0.0, 1.0);
+    final double fade = (1.0 - Curves.easeIn.transform(t)).clamp(0.0, 1.0);
+    if (fade <= 0.02) {
+      return;
+    }
+    final double size = s.size * (1.0 - t * 0.35);
+    final Color tint = _bubbleTint(s.hueSeed, 2);
+
+    final Paint glow = Paint()
+      ..color = tint.withValues(alpha: 0.25 * fade)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.2);
+    canvas.drawCircle(Offset(s.x, s.y), size * 1.6, glow);
+
+    final Paint core = Paint()
+      ..color = Colors.white.withValues(alpha: 0.85 * fade);
+    canvas.drawCircle(Offset(s.x, s.y), size, core);
+
+    final Paint rim = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = tint.withValues(alpha: 0.5 * fade);
+    canvas.drawCircle(Offset(s.x, s.y), size, rim);
+  }
+
+  /// Beş uçlu yıldız; dış köşeler [quadraticBezierTo] ile yumuşatılmış (yuvarlak uçlar).
+  Path _roundedFivePointStarPath(
+    Offset c, {
+    required double outerR,
+    required double innerR,
+  }) {
     const int points = 5;
+    final List<Offset> outer = List<Offset>.generate(
+      points,
+      (int k) {
+        final double a = -math.pi / 2 + k * 2 * math.pi / points;
+        return Offset(
+          c.dx + outerR * math.cos(a),
+          c.dy + outerR * math.sin(a),
+        );
+      },
+    );
+    final List<Offset> inner = List<Offset>.generate(
+      points,
+      (int k) {
+        final double a =
+            -math.pi / 2 + k * 2 * math.pi / points + math.pi / points;
+        return Offset(
+          c.dx + innerR * math.cos(a),
+          c.dy + innerR * math.sin(a),
+        );
+      },
+    );
+
     final Path path = Path();
-    for (int i = 0; i < points * 2; i++) {
-      final double a = -math.pi / 2 + (i * math.pi / points);
-      final double r = i.isEven ? outerR : innerR;
-      final double x = c.dx + r * math.cos(a);
-      final double y = c.dy + r * math.sin(a);
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
-      }
+    path.moveTo(inner[points - 1].dx, inner[points - 1].dy);
+    for (int k = 0; k < points; k++) {
+      path.quadraticBezierTo(
+        outer[k].dx,
+        outer[k].dy,
+        inner[k].dx,
+        inner[k].dy,
+      );
     }
     path.close();
     return path;
@@ -1139,8 +1491,6 @@ class _RippleRing {
   double delayMs = 0;
   double durationMs = 1500;
   double maxRadius = 100;
-  int ringIndex = 0;
-  Color strokeColor = const Color(0xFF0284C7);
   bool alive = false;
 }
 
@@ -1179,9 +1529,40 @@ class _StarParticle {
   double lifeMs = 900;
   double rotation = 0;
   double spin = 2;
-  double hueShift = 0;
+  Color fillColor = const Color(0xFFFFE082);
   bool alive = false;
 }
+
+class _SoapBubble {
+  double x = 0;
+  double y = 0;
+  double baseX = 0;
+  double radius = 30;
+  double riseSpeed = 40;
+  double swayAmp = 20;
+  double swayFreq = 0.9;
+  double swayPhase = 0;
+  double ageMs = 0;
+  double spawnScaleMs = 0;
+  double hueSeed = 0;
+  bool popping = false;
+  double popAgeMs = 0;
+  bool alive = false;
+}
+
+class _BubbleShard {
+  double x = 0;
+  double y = 0;
+  double vx = 0;
+  double vy = 0;
+  double size = 2;
+  double hueSeed = 0;
+  double ageMs = 0;
+  double lifeMs = 400;
+  bool alive = false;
+}
+
+enum BubbleTapResult { spawned, popped }
 
 /// [PlayAreaAnimationEngine] çizimini [repaint] ile bağlar.
 class PlayAreaPainter extends CustomPainter {
