@@ -184,6 +184,13 @@ class _Body extends StatelessWidget {
                         isSelected: selectedMode == GameplayMode.soapBubbles,
                         onTap: () => onModeSelected(GameplayMode.soapBubbles),
                       ),
+                      const SizedBox(width: 16),
+                      _ModeIconCircle(
+                        diameter: modeIconDiameter,
+                        mode: GameplayMode.paintSplat,
+                        isSelected: selectedMode == GameplayMode.paintSplat,
+                        onTap: () => onModeSelected(GameplayMode.paintSplat),
+                      ),
                     ],
                   ),
                 ),

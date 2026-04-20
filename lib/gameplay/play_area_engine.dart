@@ -47,6 +47,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final ObjectPool<_BubbleShard> _shardPool = ObjectPool<_BubbleShard>(
     _BubbleShard.new,
   );
+  final ObjectPool<_PaintSplat> _splatPool = ObjectPool<_PaintSplat>(
+    _PaintSplat.new,
+  );
 
   final List<_RippleRing> _ripples = <_RippleRing>[];
   final List<_StarParticle> _stars = <_StarParticle>[];
@@ -56,6 +59,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   final List<_FlowerPetal> _flowerPetals = <_FlowerPetal>[];
   final List<_SoapBubble> _bubbles = <_SoapBubble>[];
   final List<_BubbleShard> _bubbleShards = <_BubbleShard>[];
+  final List<_PaintSplat> _paintSplats = <_PaintSplat>[];
   final math.Random _rng = math.Random();
 
   Float32List? _dustPos;
@@ -120,6 +124,45 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
   static const double _bubblePopLifeMs = 260;
   static const int _bubbleShardCount = 8;
 
+  /// Spring-wobble parameters for the paint splat: critically-ish underdamped
+  /// so the blob expands fast, overshoots a hair, then settles.
+  static const double _splatWobbleStiffness = 95.0;
+  static const double _splatWobbleDamping = 6.5;
+  /// Initial displacement: blob starts at ~45% of its final size and springs
+  /// outward to its settled radius.
+  static const double _splatInitialDisplacement = -0.55;
+
+  static const double _splatHoldMs = 6000;
+  static const double _splatFadeMs = 1200;
+  static const double _splatRadiusMin = 48;
+  static const double _splatRadiusMax = 92;
+  // Fewer lobes → each lobe is wider and survives the heavy metaball blur.
+  static const int _splatLobeMin = 6;
+  static const int _splatLobeMax = 9;
+  // Per-lobe radius range, expressed as multiplier of the blob's base radius.
+  // Wider spread = deeper bumps / pinches in the silhouette.
+  static const double _splatLobeRadiusMin = 0.55;
+  static const double _splatLobeRadiusMax = 1.40;
+  // Extra angular jitter so lobes don't sit on a regular polygon.
+  static const double _splatLobeAngleJitter = 0.18;
+  // Per-blob non-uniform scaling (stretch) so some splats look tall/eggy and
+  // others wide — this is what's left after the 30-sigma blur homogenises
+  // fine lobe detail.
+  static const double _splatAspectMin = 0.72;
+  static const double _splatAspectMax = 1.32;
+
+  /// Heavy gaussian blur on each blob — the other half of the metaball trick;
+  /// paired with the high-contrast alpha matrix in the screen widget, this is
+  /// what creates the merging "melting" behaviour between nearby blobs.
+  static const double _splatMetaballBlurSigma = 30.0;
+
+  /// Lime Green, Bright Orange, Hot Pink — child-friendly paint palette.
+  static const List<Color> _splatPalette = <Color>[
+    Color(0xFFA3E635),
+    Color(0xFFFB923C),
+    Color(0xFFEC4899),
+  ];
+
   bool get hasActiveEffects =>
       _ripples.isNotEmpty ||
       _stars.isNotEmpty ||
@@ -129,6 +172,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       _flowerPetals.isNotEmpty ||
       _bubbles.isNotEmpty ||
       _bubbleShards.isNotEmpty ||
+      _paintSplats.isNotEmpty ||
       _dustCount > 0;
 
   void handleTap(Offset localPosition, Size areaSize, GameplayMode mode) {
@@ -165,6 +209,9 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       case GameplayMode.soapBubbles:
         handleBubbleTap(localPosition);
         return;
+      case GameplayMode.paintSplat:
+        _spawnPaintSplat(localPosition);
+        break;
     }
     _ensureTicker();
   }
@@ -216,6 +263,48 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
       ..popAgeMs = 0
       ..alive = true;
     _bubbles.add(b);
+    notifyListeners();
+  }
+
+  void _spawnPaintSplat(Offset origin) {
+    final _PaintSplat splat = _splatPool.acquire();
+    final int lobeCount = _splatLobeMin +
+        _rng.nextInt(_splatLobeMax - _splatLobeMin + 1);
+    final double baseRadius = _splatRadiusMin +
+        _rng.nextDouble() * (_splatRadiusMax - _splatRadiusMin);
+    final Color color = _splatPalette[_rng.nextInt(_splatPalette.length)];
+    final Float32List lobeRadii = Float32List(lobeCount);
+    final Float32List lobeAngleJitter = Float32List(lobeCount);
+    const double radiusSpread = _splatLobeRadiusMax - _splatLobeRadiusMin;
+    for (int i = 0; i < lobeCount; i++) {
+      lobeRadii[i] =
+          _splatLobeRadiusMin + _rng.nextDouble() * radiusSpread;
+      lobeAngleJitter[i] =
+          (_rng.nextDouble() - 0.5) * 2 * _splatLobeAngleJitter;
+    }
+    // Non-uniform per-splat stretch. We pick the X scale freely, then derive Y
+    // from its reciprocal-ish so the average area stays similar across taps.
+    const double aspectSpread = _splatAspectMax - _splatAspectMin;
+    final double sx = _splatAspectMin + _rng.nextDouble() * aspectSpread;
+    // sy ranges roughly in the same band but is anti-correlated with sx so we
+    // get eggy/wide shapes instead of everything being bigger or smaller.
+    final double sy = _splatAspectMin +
+        (_splatAspectMax - sx) +
+        (_rng.nextDouble() - 0.5) * 0.15;
+    splat
+      ..center = origin
+      ..baseRadius = baseRadius
+      ..baseRotation = _rng.nextDouble() * math.pi * 2
+      ..aspectX = sx.clamp(_splatAspectMin, _splatAspectMax).toDouble()
+      ..aspectY = sy.clamp(_splatAspectMin, _splatAspectMax).toDouble()
+      ..color = color
+      ..lobeRadii = lobeRadii
+      ..lobeAngleJitter = lobeAngleJitter
+      ..wobbleDisplacement = _splatInitialDisplacement
+      ..wobbleVelocity = 0
+      ..ageMs = 0
+      ..alive = true;
+    _paintSplats.add(splat);
     notifyListeners();
   }
 
@@ -398,6 +487,7 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     _updateFlowerPetals(dtMs);
     _updateBubbles(dtMs);
     _updateBubbleShards(dtMs);
+    _updatePaintSplats(dtMs);
     if (_dustCount > 0) {
       _updateMagneticDust(dtMs);
     }
@@ -555,6 +645,27 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
         b.alive = false;
         _bubbles.removeAt(i);
         _bubblePool.release(b);
+      }
+    }
+  }
+
+  void _updatePaintSplats(double dtMs) {
+    final double dtSec = dtMs / 1000.0;
+    final double totalMs = _splatHoldMs + _splatFadeMs;
+    for (int i = _paintSplats.length - 1; i >= 0; i--) {
+      final _PaintSplat s = _paintSplats[i];
+      s.ageMs += dtMs;
+
+      // Spring integration: acc = -k·x − c·v (Hooke + viscous damping).
+      final double acc = (-_splatWobbleStiffness * s.wobbleDisplacement) -
+          (_splatWobbleDamping * s.wobbleVelocity);
+      s.wobbleVelocity += acc * dtSec;
+      s.wobbleDisplacement += s.wobbleVelocity * dtSec;
+
+      if (s.ageMs >= totalMs) {
+        s.alive = false;
+        _paintSplats.removeAt(i);
+        _splatPool.release(s);
       }
     }
   }
@@ -755,6 +866,11 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     final Rect rect = Offset.zero & size;
     final Paint bg = Paint()..color = TiptipColors.background;
     canvas.drawRect(rect, bg);
+
+    // NOTE: paint splats are deliberately NOT drawn here. They render through
+    // the dedicated [PaintSplatMetaballPainter] (wrapped in a [ColorFiltered]
+    // that thresholds alpha for the metaball merge) and the on-top
+    // [PaintSplatHighlightsPainter] layer in the gameplay screen widget tree.
 
     for (final _RippleRing r in _ripples) {
       _paintRippleRing(canvas, r);
@@ -1391,6 +1507,176 @@ class PlayAreaAnimationEngine extends ChangeNotifier {
     );
   }
 
+  /// Organic blob path: walks lobe points at varying radii and connects them
+  /// with [Path.quadraticBezierTo] through their midpoints, producing the soft
+  /// rounded-edge silhouette characteristic of a thick paint splat.
+  Path _buildSplatPath({
+    required Offset center,
+    required double radius,
+    required double rotation,
+    required Float32List radii,
+    required Float32List angleJitter,
+    double aspectX = 1.0,
+    double aspectY = 1.0,
+  }) {
+    final int n = radii.length;
+    final List<Offset> pts = List<Offset>.filled(n, Offset.zero);
+    for (int i = 0; i < n; i++) {
+      final double a = rotation + (i / n) * math.pi * 2 + angleJitter[i];
+      final double r = radius * radii[i];
+      // Per-axis stretch applied AFTER the polar placement so the silhouette
+      // keeps its lobe structure but becomes egg-shaped, oval, etc.
+      pts[i] = Offset(
+        center.dx + math.cos(a) * r * aspectX,
+        center.dy + math.sin(a) * r * aspectY,
+      );
+    }
+
+    Offset mid(Offset a, Offset b) => Offset(
+          (a.dx + b.dx) * 0.5,
+          (a.dy + b.dy) * 0.5,
+        );
+
+    final Path path = Path();
+    final Offset start = mid(pts[n - 1], pts[0]);
+    path.moveTo(start.dx, start.dy);
+    for (int i = 0; i < n; i++) {
+      final Offset ctrl = pts[i];
+      final Offset next = mid(pts[i], pts[(i + 1) % n]);
+      path.quadraticBezierTo(ctrl.dx, ctrl.dy, next.dx, next.dy);
+    }
+    path.close();
+    return path;
+  }
+
+  /// Fade envelope for a splat (no fade-in — it bursts into view).
+  double _splatAlpha(_PaintSplat s) {
+    if (s.ageMs < _splatHoldMs) {
+      return 1.0;
+    }
+    final double u =
+        ((s.ageMs - _splatHoldMs) / _splatFadeMs).clamp(0.0, 1.0);
+    return (1.0 - Curves.easeIn.transform(u)).clamp(0.0, 1.0);
+  }
+
+  /// Live radius: settled size modulated by the spring-wobble displacement.
+  double _splatCurrentRadius(_PaintSplat s) {
+    final double scale = math.max(0.0, 1.0 + s.wobbleDisplacement);
+    return s.baseRadius * scale;
+  }
+
+  /// Solid-colour blob with a heavy gaussian blur — this layer is intended
+  /// to be rendered inside a [ColorFiltered] widget whose matrix thresholds
+  /// alpha, turning overlapping gaussians into one merged metaball.
+  void _paintSplatMetaball(Canvas canvas, _PaintSplat s) {
+    final double alpha = _splatAlpha(s);
+    final double r = _splatCurrentRadius(s);
+    if (alpha <= 0.01 || r <= 0.5) {
+      return;
+    }
+    final Path blob = _buildSplatPath(
+      center: s.center,
+      radius: r,
+      rotation: s.baseRotation,
+      radii: s.lobeRadii,
+      angleJitter: s.lobeAngleJitter,
+      aspectX: s.aspectX,
+      aspectY: s.aspectY,
+    );
+    // Solid vibrant colour so merges read cleanly after alpha-thresholding.
+    final Paint paint = Paint()
+      ..color = s.color.withValues(alpha: alpha)
+      ..maskFilter =
+          const MaskFilter.blur(BlurStyle.normal, _splatMetaballBlurSigma);
+    canvas.drawPath(blob, paint);
+  }
+
+  /// Waxy "Nano Banana" highlight drawn OUTSIDE the metaball filter so it
+  /// doesn't get thresholded — this is the secondary lighter paint layer
+  /// on top of each blob that gives it a subtle raised/wet feel.
+  void _paintSplatHighlight(Canvas canvas, _PaintSplat s) {
+    final double alpha = _splatAlpha(s);
+    final double r = _splatCurrentRadius(s);
+    if (alpha <= 0.04 || r <= 1) {
+      return;
+    }
+
+    final Color lighter = Color.lerp(s.color, Colors.white, 0.55)!;
+
+    // Small inner shadow rim on the bottom-right for the 3D raised lip.
+    // Offsets / sizes scale with the blob's aspect so heavily-stretched
+    // splats don't have their sheen fall outside the silhouette.
+    final double rx = r * s.aspectX;
+    final double ry = r * s.aspectY;
+
+    final Offset shadowCenter = Offset(
+      s.center.dx + rx * 0.22,
+      s.center.dy + ry * 0.28,
+    );
+    final Rect shadowRect = Rect.fromCenter(
+      center: shadowCenter,
+      width: rx * 1.56,
+      height: ry * 1.56,
+    );
+    final Paint innerShadow = Paint()
+      ..shader = RadialGradient(
+        colors: <Color>[
+          Colors.black.withValues(alpha: 0),
+          Colors.black.withValues(alpha: 0.16 * alpha),
+        ],
+        stops: const <double>[0.55, 1.0],
+      ).createShader(shadowRect);
+    canvas.drawOval(shadowRect, innerShadow);
+
+    // Top-left glossy highlight — waxy secondary paint layer.
+    final Offset hc = Offset(
+      s.center.dx - rx * 0.30,
+      s.center.dy - ry * 0.36,
+    );
+    final Rect hr = Rect.fromCenter(
+      center: hc,
+      width: rx * 0.90,
+      height: ry * 0.52,
+    );
+    final Paint highlight = Paint()
+      ..shader = RadialGradient(
+        colors: <Color>[
+          Colors.white.withValues(alpha: 0.55 * alpha),
+          lighter.withValues(alpha: 0.28 * alpha),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const <double>[0.0, 0.55, 1.0],
+      ).createShader(hr);
+    canvas.save();
+    canvas.translate(hc.dx, hc.dy);
+    canvas.rotate(-0.42);
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset.zero,
+        width: hr.width,
+        height: hr.height,
+      ),
+      highlight,
+    );
+    canvas.restore();
+  }
+
+  /// Public metaball-pass entry point — called from the dedicated
+  /// [PaintSplatMetaballPainter] inside a [ColorFiltered] widget.
+  void paintSplatMetaballs(Canvas canvas) {
+    for (final _PaintSplat s in _paintSplats) {
+      _paintSplatMetaball(canvas, s);
+    }
+  }
+
+  /// Waxy-highlight pass — drawn on top of the merged metaball layer (NOT
+  /// through the ColorFiltered threshold) so highlights remain subtle.
+  void paintSplatHighlights(Canvas canvas) {
+    for (final _PaintSplat s in _paintSplats) {
+      _paintSplatHighlight(canvas, s);
+    }
+  }
+
   void _paintBubbleShard(Canvas canvas, _BubbleShard s) {
     final double t = (s.ageMs / s.lifeMs).clamp(0.0, 1.0);
     final double fade = (1.0 - Curves.easeIn.transform(t)).clamp(0.0, 1.0);
@@ -1564,6 +1850,23 @@ class _BubbleShard {
 
 enum BubbleTapResult { spawned, popped }
 
+class _PaintSplat {
+  Offset center = Offset.zero;
+  double baseRadius = 60;
+  double baseRotation = 0;
+  // Per-axis stretch so each blob has a distinct egg / oval / wide silhouette.
+  double aspectX = 1.0;
+  double aspectY = 1.0;
+  Color color = const Color(0xFFFB923C);
+  Float32List lobeRadii = Float32List(0);
+  Float32List lobeAngleJitter = Float32List(0);
+  double ageMs = 0;
+  // Spring-wobble state — rendered scale is (1 + wobbleDisplacement).
+  double wobbleDisplacement = 0;
+  double wobbleVelocity = 0;
+  bool alive = false;
+}
+
 /// [PlayAreaAnimationEngine] çizimini [repaint] ile bağlar.
 class PlayAreaPainter extends CustomPainter {
   PlayAreaPainter(this.engine, this.activeMode) : super(repaint: engine);
@@ -1579,4 +1882,40 @@ class PlayAreaPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant PlayAreaPainter oldDelegate) =>
       oldDelegate.activeMode != activeMode;
+}
+
+/// Paints only the heavy-blurred, solid-colour paint-splat blobs onto a
+/// transparent canvas. Intended to be the child of a [ColorFiltered] widget
+/// whose matrix thresholds the alpha channel — together they produce the
+/// metaball "merging" effect when blurred blobs overlap.
+class PaintSplatMetaballPainter extends CustomPainter {
+  PaintSplatMetaballPainter(this.engine) : super(repaint: engine);
+
+  final PlayAreaAnimationEngine engine;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    engine.paintSplatMetaballs(canvas);
+  }
+
+  @override
+  bool shouldRepaint(covariant PaintSplatMetaballPainter oldDelegate) => false;
+}
+
+/// Paints the waxy top-left highlight + bottom-right inner-shadow pass over
+/// the merged metaball layer. NOT wrapped by the threshold filter, so these
+/// decorative layers remain subtle instead of being fully opaque/clipped.
+class PaintSplatHighlightsPainter extends CustomPainter {
+  PaintSplatHighlightsPainter(this.engine) : super(repaint: engine);
+
+  final PlayAreaAnimationEngine engine;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    engine.paintSplatHighlights(canvas);
+  }
+
+  @override
+  bool shouldRepaint(covariant PaintSplatHighlightsPainter oldDelegate) =>
+      false;
 }

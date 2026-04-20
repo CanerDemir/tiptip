@@ -138,27 +138,41 @@ class _GameplayScreenState extends State<GameplayScreen>
     Offset localPosition,
     Size areaSize,
   ) {
-    HapticFeedback.lightImpact();
     int? pitchClass;
     switch (mode) {
       case GameplayMode.water:
+        HapticFeedback.lightImpact();
         unawaited(GameplaySfx.instance.playWaterDrip());
         break;
       case GameplayMode.star:
+        HapticFeedback.lightImpact();
         unawaited(GameplaySfx.instance.playStarTwinkle());
         break;
       case GameplayMode.jelly:
+        HapticFeedback.lightImpact();
         break;
       case GameplayMode.musicalRain:
+        HapticFeedback.lightImpact();
         pitchClass = _nextRainPitchClass();
         unawaited(GameplaySfx.instance.playRainPentatonicChime(pitchClass));
         break;
       case GameplayMode.floralBloom:
+        HapticFeedback.lightImpact();
         unawaited(GameplaySfx.instance.playWaterDrip());
         break;
       case GameplayMode.magneticDust:
+        HapticFeedback.lightImpact();
         break;
       case GameplayMode.soapBubbles:
+        HapticFeedback.lightImpact();
+        break;
+      case GameplayMode.paintSplat:
+        // Heavier haptic to match the thick, squishy paint feel — distinct
+        // from the light tap used by water/ripple modes.
+        HapticFeedback.mediumImpact();
+        // Fire the plop SFX at onTapDown so it lines up with the initial
+        // spring-expansion of the blob.
+        unawaited(GameplaySfx.instance.playPaintPlop());
         break;
     }
     _playEngine.handleTapWithPitch(
@@ -260,12 +274,9 @@ class _GameplayScreenState extends State<GameplayScreen>
                     onPointerCancel: (PointerCancelEvent e) {
                       _playEngine.magneticTouchUp(e.pointer);
                     },
-                    child: CustomPaint(
-                      painter: PlayAreaPainter(
-                        _playEngine,
-                        GameplayMode.values[_activeModeIndex],
-                      ),
-                      child: const SizedBox.expand(),
+                    child: _PlayAreaStack(
+                      engine: _playEngine,
+                      activeMode: GameplayMode.values[_activeModeIndex],
                     ),
                   ),
                 );
@@ -453,6 +464,70 @@ class _ModeIconCell extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Composes the play-area painters. For [GameplayMode.paintSplat], the splat
+/// layer is wrapped with a [ColorFiltered] matrix that thresholds the alpha
+/// channel — combined with the heavy per-blob [MaskFilter.blur] in the
+/// painter, this produces the merging "metaball" effect. A separate, unfiltered
+/// highlights layer is painted above the merged result so the waxy Nano Banana
+/// sheen stays subtle instead of being clamped to solid by the filter.
+class _PlayAreaStack extends StatelessWidget {
+  const _PlayAreaStack({
+    required this.engine,
+    required this.activeMode,
+  });
+
+  final PlayAreaAnimationEngine engine;
+  final GameplayMode activeMode;
+
+  /// Bumps alpha contrast hard: `a' = 50·a − 1000`, clamped 0–255. Any pixel
+  /// below ~8% alpha vanishes; anything above snaps to fully opaque, which is
+  /// what sharpens the blurred blob edges and fuses neighbours into one mass.
+  static const List<double> _metaballMatrix = <double>[
+    1, 0, 0, 0, 0,
+    0, 1, 0, 0, 0,
+    0, 0, 1, 0, 0,
+    0, 0, 0, 50, -1000,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget base = CustomPaint(
+      painter: PlayAreaPainter(engine, activeMode),
+      child: const SizedBox.expand(),
+    );
+
+    if (activeMode != GameplayMode.paintSplat) {
+      return base;
+    }
+
+    return Stack(
+      fit: StackFit.expand,
+      children: <Widget>[
+        base,
+        // Metaball merging layer — wrapped in ColorFiltered as requested so
+        // the threshold matrix operates on the blurred blob alpha.
+        IgnorePointer(
+          child: ColorFiltered(
+            colorFilter: const ColorFilter.matrix(_metaballMatrix),
+            child: CustomPaint(
+              painter: PaintSplatMetaballPainter(engine),
+              child: const SizedBox.expand(),
+            ),
+          ),
+        ),
+        // Waxy highlight / inner-shadow pass drawn over the merged shapes
+        // (outside the threshold filter).
+        IgnorePointer(
+          child: CustomPaint(
+            painter: PaintSplatHighlightsPainter(engine),
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ],
     );
   }
 }

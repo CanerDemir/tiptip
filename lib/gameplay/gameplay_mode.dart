@@ -8,6 +8,7 @@ enum GameplayMode {
   floralBloom,
   magneticDust,
   soapBubbles,
+  paintSplat,
 }
 
 extension GameplayModeVisual on GameplayMode {
@@ -27,6 +28,8 @@ extension GameplayModeVisual on GameplayMode {
         return Icons.blur_on_rounded;
       case GameplayMode.soapBubbles:
         return Icons.circle_outlined;
+      case GameplayMode.paintSplat:
+        return Icons.palette_rounded;
     }
   }
 
@@ -46,6 +49,8 @@ extension GameplayModeVisual on GameplayMode {
         return const Color(0xFF8B7EC8);
       case GameplayMode.soapBubbles:
         return const Color(0xFF7DD3FC);
+      case GameplayMode.paintSplat:
+        return const Color(0xFFFB923C);
     }
   }
 
@@ -65,6 +70,8 @@ extension GameplayModeVisual on GameplayMode {
         return 'Magnetic dust mode';
       case GameplayMode.soapBubbles:
         return 'Soap bubbles mode';
+      case GameplayMode.paintSplat:
+        return 'Paint splat mode';
     }
   }
 }
